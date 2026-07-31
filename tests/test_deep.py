@@ -110,6 +110,13 @@ def test_follow_up_job_resumes_the_stored_session():
     assert "--resume" in cmd and "--session-id" not in cmd
 
 
+def test_command_uses_auto_permission_mode():
+    """Auto mode judges each action in context, the same way an interactive
+    session does. --allowedTools still bounds the tool set independently."""
+    cmd = worker._command({"prompt": "x"}, "s", resume=False)
+    assert cmd[cmd.index("--permission-mode") + 1] == "auto"
+
+
 def test_command_pins_mcp_config_strictly():
     """Without --strict-mcp-config the CLI also loads the user's own MCP
     servers, handing the job tools this code never granted."""

@@ -94,8 +94,15 @@ def _command(job: dict, session_id: str, resume: bool) -> list[str]:
         "--strict-mcp-config",
         "--allowedTools",
         ALLOWED_TOOLS,
+        # Auto mode: the same classifier-driven permissioning an interactive
+        # session uses, rather than dontAsk's flat gate. It judges each action
+        # in context (17 allow rules, 65 soft denies, a hard deny on data
+        # exfiltration) instead of accepting or refusing by tool name alone.
+        #
+        # This widens what the agent may *decide* to do, not what it *can* do:
+        # --allowedTools still bounds the tool set, and Bash is not in it.
         "--permission-mode",
-        "dontAsk",
+        "auto",
     ]
     cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
     return cmd
