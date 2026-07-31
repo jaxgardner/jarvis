@@ -92,12 +92,47 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "question": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["agenda", "when", "recall", "other"],
+                    "description": (
+                        "The shape of the question. 'agenda' = what is "
+                        "happening in a date range ('what's on tomorrow', "
+                        "'what does my week look like'). 'when' = the time of "
+                        "one specific known thing ('when is my dentist "
+                        "appointment'). 'recall' = retrieving a stored fact "
+                        "('what did I say about Sarah', 'what's the wifi "
+                        "password'). 'other' = anything needing reasoning, "
+                        "counting, or comparison across items."
+                    ),
+                },
+                "subject": {
+                    "type": "string",
+                    "description": (
+                        "For 'when' and 'recall': the thing being asked about, "
+                        "as a few keywords. e.g. 'dentist', 'Sarah', 'wifi'."
+                    ),
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": (
+                        "For 'agenda': first day to include, YYYY-MM-DD, taken "
+                        "from the calendar table. Today's date for 'today'."
+                    ),
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": (
+                        "For 'agenda': last day to include, YYYY-MM-DD, "
+                        "inclusive. Same as date_from for a single day."
+                    ),
+                },
                 "window_days": {
                     "type": "integer",
                     "description": "How many days ahead are relevant. Default 7.",
                 },
             },
-            "required": ["question"],
+            "required": ["question", "kind"],
         },
     },
     {
@@ -244,7 +279,10 @@ def calendar_table(local: datetime) -> str:
         "",
         "  weekday        soonest       when preceded by \"next\"",
     ]
-    for offset in range(1, 8):
+    # Start at 0, not 1. Starting at tomorrow omits today's own weekday from
+    # the table, so "Friday at 6" said on a Friday morning resolved to next
+    # Friday — the model had no row saying Friday could mean today.
+    for offset in range(0, 7):
         day = local + timedelta(days=offset)
         following = day + timedelta(days=7)
         # Pad the weekday name separately — a width spec inside a datetime
@@ -265,8 +303,21 @@ def system_prompt(tz_name: str) -> str:
     )
 
 
+_CLIENT: anthropic.Anthropic | None = None
+
+
 def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=config.anthropic_api_key())
+    """One client for the process lifetime.
+
+    Constructing a client per call throws away the HTTP connection pool, so
+    every request pays a fresh TCP + TLS handshake to api.anthropic.com — pure
+    overhead on a path with a two-second budget. The daemon is long-lived, so
+    the pool should be too.
+    """
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = anthropic.Anthropic(api_key=config.anthropic_api_key())
+    return _CLIENT
 
 
 def route(text: str, tz_name: str) -> tuple[str, dict]:

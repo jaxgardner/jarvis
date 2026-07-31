@@ -7,6 +7,7 @@ model problem. Deterministic, and it saves a round trip against the 2s budget.
 
 import json
 import sqlite3
+from datetime import datetime, timedelta
 
 from app import mutations, router, timeutil
 
@@ -185,7 +186,129 @@ def agenda_rows(conn, tz_name: str, days: int) -> dict:
     }
 
 
+def _join(parts: list[str]) -> str:
+    """Natural spoken list: 'a', 'a and b', 'a, b, and c'."""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return f"{', '.join(parts[:-1])}, and {parts[-1]}"
+
+
+def _day_window(args: dict, tz_name: str) -> tuple[str, str, str] | None:
+    """Resolve the router's date_from/date_to into a UTC range plus a spoken
+    label. Returns None if the dates are missing or unparseable, which sends
+    the caller to the model instead of guessing."""
+    raw_from = (args.get("date_from") or "").strip()
+    raw_to = (args.get("date_to") or raw_from).strip()
+    if not raw_from:
+        return None
+    try:
+        zone = timeutil.zone(tz_name)
+        start = datetime.strptime(raw_from, "%Y-%m-%d").replace(tzinfo=zone)
+        end_day = datetime.strptime(raw_to, "%Y-%m-%d").replace(tzinfo=zone)
+    except ValueError:
+        return None
+
+    end = end_day + timedelta(days=1)  # inclusive of the last day
+    today = timeutil.now(tz_name).date()
+    delta = (start.date() - today).days
+    if start.date() == end_day.date():
+        label = {0: "Today", 1: "Tomorrow", -1: "Yesterday"}.get(
+            delta, start.strftime("%A")
+        )
+    else:
+        label = "Coming up"
+    return timeutil.to_utc_iso(start), timeutil.to_utc_iso(end), label
+
+
+def _answer_agenda(conn, args: dict, tz_name: str) -> str | None:
+    window = _day_window(args, tz_name)
+    if window is None:
+        return None
+    start, end, label = window
+
+    events = conn.execute(
+        """SELECT title, starts_at, all_day, location FROM events
+             WHERE deleted_at IS NULL AND starts_at >= ? AND starts_at < ?
+             ORDER BY starts_at""",
+        (start, end),
+    ).fetchall()
+    reminders = conn.execute(
+        """SELECT body, fire_at FROM reminders
+             WHERE status IN ('pending','firing') AND fire_at >= ? AND fire_at < ?
+             ORDER BY fire_at""",
+        (start, end),
+    ).fetchall()
+
+    if not events and not reminders:
+        return f"{label} looks clear."
+
+    # Single day: the sentence already names it ("Tomorrow you have…"), so
+    # speak only the clock time. Multi-day: each item needs its own day.
+    single_day = label != "Coming up"
+
+    def phrase(value: str, all_day: bool = False) -> str:
+        if all_day:
+            return "all day" if single_day else timeutil.speak_datetime(value, tz_name, True)
+        if single_day:
+            return f"at {timeutil.speak_time(timeutil.to_local(value, tz_name))}"
+        return timeutil.speak_datetime(value, tz_name)
+
+    parts: list[str] = []
+    for e in events:
+        where = f" at {e['location']}" if e["location"] else ""
+        parts.append(f"{e['title']} {phrase(e['starts_at'], bool(e['all_day']))}{where}")
+    for r in reminders:
+        parts.append(f"a reminder to {r['body']} {phrase(r['fire_at'])}")
+
+    return f"{label} you have {_join(parts)}."
+
+
+def _answer_when(conn, args: dict, tz_name: str) -> str | None:
+    subject = (args.get("subject") or "").strip()
+    if not subject:
+        return None
+    found = _find_match(conn, subject)
+    if found is None:
+        return f"I don't have anything about {subject}."
+
+    table, row = found
+    if table == "events":
+        when = timeutil.speak_datetime(row["starts_at"], tz_name, bool(row["all_day"]))
+        where = f" at {row['location']}" if row["location"] else ""
+        return f"{row['title']} is {when}{where}."
+    return f"You have a reminder to {row['body']} {timeutil.speak_datetime(row['fire_at'], tz_name)}."
+
+
+def _answer_recall(conn, args: dict, tz_name: str) -> str | None:
+    subject = (args.get("subject") or args.get("question") or "").strip()
+    notes = _search_notes(conn, subject, limit=3)
+    if not notes:
+        return None  # let the model try; it may reword the question usefully
+    if len(notes) == 1:
+        return f"You noted: {notes[0]['body']}"
+    bodies = "; ".join(n["body"] for n in notes[:3])
+    return f"You noted: {bodies}"
+
+
 def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    # Fast path: the router already told us the question's shape in the call
+    # we had to make anyway, so common questions are answered by formatting
+    # rows in Python — no second model hop. Each templater returns None when
+    # it can't answer confidently, which falls through to the model rather
+    # than guessing.
+    kind = (args.get("kind") or "other").strip()
+    templated = {
+        "agenda": _answer_agenda,
+        "when": _answer_when,
+        "recall": _answer_recall,
+    }.get(kind)
+    if templated is not None:
+        answer = templated(conn, args, tz_name)
+        if answer:
+            return answer
+
     # Floor the window at 8 days regardless of what the router asked for.
     # The window starts at *today's* midnight, so window_days=1 — which the
     # router naturally picks for "what's on tomorrow" — produces a window that

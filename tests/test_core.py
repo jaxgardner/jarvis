@@ -149,3 +149,27 @@ def test_soft_deleted_notes_stay_in_fts_index(conn):
              WHERE notes_fts MATCH 'Theo' AND n.deleted_at IS NULL"""
     ).fetchone()
     assert survived is None
+
+
+# ── router calendar table ─────────────────────────────────
+
+
+def test_calendar_table_includes_today_as_its_own_weekday():
+    """Regression: the table started at tomorrow, so "Friday at 6" said on a
+    Friday morning resolved to *next* Friday — there was no row telling the
+    model that Friday could mean today."""
+    from app import router
+
+    friday = datetime(2026, 7, 31, 8, 0, tzinfo=ZoneInfo("America/Denver"))
+    table = router.calendar_table(friday)
+    line = next(l for l in table.splitlines() if l.strip().startswith("Friday"))
+    assert "2026-07-31" in line, f"today's weekday missing from table: {line}"
+    assert "2026-08-07" in line, "the 'next' column should be a week out"
+
+
+def test_calendar_table_covers_all_seven_weekdays():
+    from app import router
+
+    table = router.calendar_table(datetime(2026, 7, 31, 8, 0, tzinfo=ZoneInfo("America/Denver")))
+    for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
+        assert any(l.strip().startswith(day) for l in table.splitlines()), day
