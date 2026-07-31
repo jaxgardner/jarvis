@@ -189,7 +189,7 @@ def test_access_token_without_credentials_says_how_to_fix_it(credential_store):
 
 def test_scopes_are_read_only():
     """Ingestion reads. A scope that can write to a calendar is a scope that
-    can delete one, and nothing in Phase 6 needs it."""
+    can delete one, and nothing in ingestion needs it."""
     assert all(scope.endswith(".readonly") for scope in google_auth.SCOPES)
 
 

@@ -22,10 +22,9 @@ helper so it is logged and undoable.
 The query does the filtering, not the model. A broad query leaning on the model
 to reject irrelevant mail costs a Haiku call per message and is worse at it.
 
-The emphasis in docs/phase-6-ingestion.md §4 is right and worth repeating: the
-risk is not that extraction is occasionally wrong. It is that one invented
-dentist appointment teaches you to distrust the agenda, and an agenda you don't
-trust is decoration.
+Worth stating plainly: the risk is not that extraction is occasionally wrong.
+It is that one invented dentist appointment teaches you to distrust the agenda,
+and an agenda you don't trust is decoration.
 """
 
 import json

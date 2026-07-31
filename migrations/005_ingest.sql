@@ -1,4 +1,4 @@
--- Phase 6: ingestion state.
+-- Ingestion state.
 --
 -- Two tables, both about not trusting the ingester.
 --

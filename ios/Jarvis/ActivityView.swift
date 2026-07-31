@@ -3,7 +3,8 @@ import SwiftUI
 /// Everything you've said, and what it changed.
 ///
 /// This screen exists because of principle 4: voice input is lossy, so undo is
-/// load-bearing. The mutations log has recorded every write since Phase 0, but
+/// load-bearing. The mutations log has recorded every write from the start,
+/// but
 /// nothing surfaced it — "undo that" was an act of faith. Here you can see what
 /// would be reversed before reversing it.
 struct ActivityView: View {

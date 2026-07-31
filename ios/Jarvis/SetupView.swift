@@ -98,8 +98,7 @@ enum VoiceSettings {
     ]
 }
 
-/// Post-enrollment settings. Deliberately thin: this is not the dashboard,
-/// which is Phase 7d.
+/// Post-enrollment settings. Deliberately thin: this is not the dashboard.
 struct SettingsView: View {
     @EnvironmentObject private var api: JarvisAPI
     @Environment(\.dismiss) private var dismiss

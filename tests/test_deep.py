@@ -1,4 +1,4 @@
-"""Phase 3 tests — search fusion and worker mechanics. No network."""
+"""Search fusion and worker mechanics. No network."""
 
 import os
 import sqlite3

@@ -60,7 +60,7 @@ def ntfy_topic() -> str:
     return _require("NTFY_TOPIC")
 
 
-# ── push (Phase 7) ────────────────────────────────────────
+# ── push ──────────────────────────────────────────────────
 # PUSH_BACKENDS is a comma-separated list, and the default is deliberately
 # "ntfy" alone. The APNs cutover is opt-in and expected to run as
 # "ntfy,apns" for a fortnight: "reminders silently stop firing" is on the
@@ -95,7 +95,7 @@ def apns_key_path() -> Path:
     return path
 
 
-# ── Google ingestion (Phase 6) ────────────────────────────
+# ── Google ingestion ──────────────────────────────────────
 # A "Desktop app" OAuth client. The client secret is not actually secret for
 # this client type — Google says so, and it ships inside every installed app —
 # but it still lives in .env rather than the repo, because there is no upside

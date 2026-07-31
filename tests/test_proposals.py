@@ -230,7 +230,7 @@ def test_health_reports_no_ingestion_before_the_first_sync(client):
 
 
 def test_health_flags_a_stale_source(client, db):
-    """The failure this phase is built against is the silent one — the agenda
+    """The failure ingestion is built against is the silent one — the agenda
     just quietly goes stale."""
     conn = sqlite3.connect(db)
     conn.execute(

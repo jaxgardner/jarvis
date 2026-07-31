@@ -1,4 +1,4 @@
--- Phase 6 fix: accepting a proposal must stay undoable.
+-- Fix: accepting a proposal must stay undoable.
 --
 -- 005 declared `proposals.event_id INTEGER REFERENCES events(id)` with no
 -- delete behaviour, which defaults to RESTRICT. Accepting a proposal writes

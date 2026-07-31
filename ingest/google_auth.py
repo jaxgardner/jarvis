@@ -39,7 +39,7 @@ from app import config
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
-# Read-only, and only what each phase actually needs. calendar.readonly is a
+# Read-only, and only what the ingesters actually need. calendar.readonly is a
 # "sensitive" scope; gmail.readonly is "restricted" — the stricter of the two
 # is what governs the consent screen's requirements.
 SCOPES = [

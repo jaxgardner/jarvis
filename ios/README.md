@@ -1,7 +1,6 @@
 # Jarvis for iOS
 
-Phase 7a — the client that replaces the Shortcut. See `docs/phase-7-ios.md`
-for the decisions behind it, including why there is no wake word.
+The client that replaces the Shortcut.
 
     open ios/Jarvis.xcodeproj
 
@@ -68,10 +67,10 @@ the path to use in a room too loud to measure. Settings has the pause length
 (0.8 / 1.2 / 2.0 seconds) and a switch to turn the whole thing off, which puts
 the second tap back.
 
-The detection is energy-based and lives on the audio thread; `docs/phase-7-ios.md`
-has the reasoning, and `JarvisTests/EndpointerTests.swift` pins the cases that
-matter — a café, a mic that opens mid-sentence, a breath mid-reminder, and a
-door slam that produces no text.
+The detection is energy-based and lives on the audio thread; `Endpointer` in
+`Transcriber.swift` carries the reasoning, and `JarvisTests/EndpointerTests.swift`
+pins the cases that matter — a café, a mic that opens mid-sentence, a breath
+mid-reminder, and a door slam that produces no text.
 
 ## The Action Button
 
@@ -99,20 +98,25 @@ On first launch the app asks for the Mini's **MagicDNS name** and the shared
 retained. Losing the phone then costs one `DELETE /devices/{id}` rather than
 re-keying every client.
 
-Use the MagicDNS name, never an IP. App Intents (7c) run in a separate
+Use the MagicDNS name, never an IP. App Intents run in a separate
 extension process that has to reach the tailnet too, and a stale IP breaks the
 Siri path while the app itself keeps working.
 
 ## What is deliberately not here yet
 
-- **The Control Center control** — the other half of 7c. Needs a widget
+- **The Control Center control.** Needs a widget
   extension target, which also needs an App Group and a shared Keychain
   access group, because a widget is a separate process and cannot see this
   app's Keychain items as things stand.
-- **The dashboard** (agenda, activity, jobs, health screens) — 7d, which
-  replaces Phase 5. `JarvisAPI` already has `agenda()` and `undo()` because
-  the notification actions need them.
-- **A wake word.** Settled, and the answer is no — `docs/phase-7-ios.md` §2.
+- **The dashboard** (agenda, activity, jobs, health screens). `JarvisAPI`
+  already has `agenda()` and `undo()` because the notification actions need
+  them.
+- **A wake word.** Settled, and the answer is no: Apple reserves the
+  wake-word layer for Siri, and a third-party app cannot register one at the
+  OS level. An in-app one needs a permanently live mic — a red status-bar
+  indicator, real battery drain, and a session iOS reclaims anyway. If
+  hands-free across the room is the requirement, the honest answer is a
+  dedicated mic on the Mini, not the phone.
 
 ## Verified, and not
 

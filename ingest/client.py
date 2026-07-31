@@ -10,7 +10,7 @@ a typed exception:
     404        — Gmail expired the historyId. Same move.
 
 An ingester that treats either as fatal stops permanently after a quiet week,
-which is the failure this phase is built to avoid.
+which is the failure this module is built to avoid.
 """
 
 import time

@@ -163,7 +163,7 @@ def undo_last(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     return f"Undone — I reverted that {label}."
 
 
-# ── notification actions (Phase 7) ────────────────────────
+# ── notification actions ──────────────────────────────────
 # Driven by the buttons on a fired reminder, not by an utterance — hence
 # utterance_id=None. They still go through `mutations`, so a fat-fingered
 # Snooze on a lock screen is undoable like everything else.
@@ -486,7 +486,7 @@ def search_email(conn, question: str, limit: int = 6) -> list[dict]:
         return []
 
 
-# ── proposals (Phase 6) ───────────────────────────────────
+# ── proposals ─────────────────────────────────────────────
 
 
 def accept_proposal(conn, proposal_id: int, tz_name: str) -> str | None:

@@ -1,8 +1,8 @@
--- Phase 6: email as context.
+-- Email as context.
 --
--- This table is an addition to what docs/phase-6-ingestion.md §4 specified.
--- That section routes Gmail exclusively into `proposals` — a review queue for
--- appointments extracted from mail — and it is right to, because nothing
+-- This table is an addition to the original ingestion design, which routed
+-- Gmail exclusively into `proposals` — a review queue for appointments
+-- extracted from mail. That was right as far as it went, because nothing
 -- extracted by a model should reach `events` unattended.
 --
 -- But proposals only answer "should this become a calendar entry?". They do
@@ -20,11 +20,10 @@
 --     reminder, so a marketing email cannot pollute the agenda. That path
 --     still runs through `proposals` and a human.
 --
--- Writes bypass the mutations helper, for the same reason calendar writes do
--- (docs/phase-6-ingestion.md §3): ingestion is not a user action, there is
--- nothing to regret, and routing a few hundred rows per sync through the log
--- would bury the user's last real action and make /undo useless for the thing
--- it was built for.
+-- Writes bypass the mutations helper, for the same reason calendar writes do:
+-- ingestion is not a user action, there is nothing to regret, and routing a
+-- few hundred rows per sync through the log would bury the user's last real
+-- action and make /undo useless for the thing it was built for.
 
 CREATE TABLE email_messages (
   id           INTEGER PRIMARY KEY,

@@ -19,8 +19,8 @@ struct JarvisApp: App {
     }
 }
 
-/// Talk is first and selected by default. The dashboard absorbs Phase 5, but
-/// it is not what the app is for — the reason this exists is to say something
+/// Talk is first and selected by default. The dashboard matters, but it is
+/// not what the app is for — the reason this exists is to say something
 /// and have it captured, and burying that behind a tab you have to choose
 /// would make the app slower than the Shortcut it replaced.
 struct RootView: View {

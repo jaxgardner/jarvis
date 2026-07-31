@@ -6,8 +6,8 @@
 load-bearing.** `scheduler/run.py` calls it in a loop over every due reminder:
 a False return puts that one reminder back to `pending` for the next tick,
 while an exception would abort the whole run and take every *other* due
-reminder down with it. Phase 7 swapped the backend underneath this signature;
-it did not change the signature, and neither should anything else.
+reminder down with it. The APNs cutover swapped the backend underneath this
+signature; it did not change the signature, and neither should anything else.
 
 Backends are selected by `PUSH_BACKENDS` (default `ntfy`). Running
 `ntfy,apns` sends both — which is how the APNs cutover is meant to be done:

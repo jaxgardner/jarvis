@@ -44,8 +44,8 @@ def test_normalizes_offset_to_utc():
 def test_utc_normalization_makes_string_ordering_correct():
     """The reason for normalizing at all.
 
-    Mixed offsets in one column are not hypothetical — Phase 6 imports calendar
-    rows in UTC while voice capture writes local time. Compared as raw strings
+    Mixed offsets in one column are not hypothetical — ingestion imports
+    calendar rows in UTC while voice capture writes local time. Compared as raw strings
     (which is what SQLite BETWEEN does), the earlier instant sorts later.
     """
     earlier = "2026-07-30T21:00:00+00:00"  # 21:00Z — from the calendar importer

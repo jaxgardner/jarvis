@@ -16,12 +16,12 @@ in the agenda forever. That is worse than never importing it, because you plan
 around it.
 
 **These writes bypass the mutations helper**, which is an exception to an
-invariant CLAUDE.md states flatly. The reason (docs/phase-6-ingestion.md §3):
-the mutations log exists to make *voice* input reversible, and a calendar
-import is not a user action. There is nothing to regret, /undo on a synced row
-is meaningless because the next sync re-adds it, and routing a few hundred rows
-per sync through the log would bury the user's last real action under them —
-making /undo useless for exactly the thing it was built for.
+invariant CLAUDE.md states flatly. The reason: the mutations log exists to make
+*voice* input reversible, and a calendar import is not a user action. There is
+nothing to regret, /undo on a synced row is meaningless because the next sync
+re-adds it, and routing a few hundred rows per sync through the log would bury
+the user's last real action under them — making /undo useless for exactly the
+thing it was built for.
 """
 
 import sys

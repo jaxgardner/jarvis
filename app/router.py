@@ -149,8 +149,8 @@ TOOLS: list[dict] = [
         },
     },
     {
-        # Not in the design doc's tool table, but its own Phase 1 test set
-        # requires it: "dentist moved to friday" is annotated "update, not
+        # Not in the original tool table, but the router test set requires
+        # it: "dentist moved to friday" is annotated "update, not
         # duplicate insert", and with only add_* tools the router's best
         # available move is the duplicate.
         "name": "reschedule",

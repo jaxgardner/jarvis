@@ -107,7 +107,7 @@ def health() -> dict:
     }
 
 
-# An ingester that stops is the failure this phase is built against, and it is
+# An ingester that stops is the failure ingestion is built against, and it is
 # a silent one — the agenda just quietly goes stale. Anything past this is
 # treated as broken rather than merely quiet.
 INGEST_STALE_AFTER = timedelta(hours=6)
@@ -312,7 +312,7 @@ def undo() -> dict:
     return {"undone": True, "reply": "Undone.", **undone}
 
 
-# ── devices (Phase 7) ─────────────────────────────────────
+# ── devices ───────────────────────────────────────────────
 
 
 @app.post("/devices")
@@ -374,7 +374,7 @@ def revoke_device(device_id: int) -> dict:
     return {"revoked": revoked, "device_id": device_id}
 
 
-# ── notification actions (Phase 7) ────────────────────────
+# ── notification actions ──────────────────────────────────
 
 
 @app.post("/reminders/{reminder_id}/snooze", dependencies=[Depends(require_token)])
@@ -396,7 +396,7 @@ def ack_reminder(reminder_id: int) -> dict:
     return {"reply": reply, "reminder_id": reminder_id}
 
 
-# ── ingestion review (Phase 6) ────────────────────────────
+# ── ingestion review ──────────────────────────────────────
 # The one place email extraction can reach `events`, and it needs a human at
 # it. An assistant that invents a dentist appointment from a marketing email is
 # worse than one that knows nothing about your mail — not because it is wrong
@@ -455,7 +455,7 @@ def inbox(limit: int = 25, unread_only: bool = False, q: str | None = None) -> d
         conn.close()
 
 
-# ── dashboard reads (Phase 7d) ────────────────────────────
+# ── dashboard reads ───────────────────────────────────────
 
 
 @app.get("/activity", dependencies=[Depends(require_token)])

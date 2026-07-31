@@ -1,4 +1,4 @@
--- Phase 2: the scheduler.
+-- The scheduler.
 --
 -- Adds a heartbeat table so "reminders silently stopped firing" is a
 -- detectable condition rather than something you notice a week late. This

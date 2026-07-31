@@ -1,4 +1,4 @@
--- Phase 7: registered devices, per-device bearer tokens, APNs.
+-- Registered devices, per-device bearer tokens, APNs.
 --
 -- Two jobs in one table:
 --

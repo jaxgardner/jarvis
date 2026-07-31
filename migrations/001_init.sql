@@ -1,4 +1,4 @@
--- Phase 0: full schema, applied up front (cheaper than migrating later).
+-- Full schema, applied up front (cheaper than migrating later).
 -- Timestamps are ISO 8601 WITH OFFSET. Never naive local time; never a bare
 -- date for something that has a time.
 
@@ -135,6 +135,6 @@ END;
 
 -- sqlite-vec (`note_vecs`) is deliberately NOT created here: the vec0 virtual
 -- table requires the extension to be loaded at CREATE time, and sqlite-vec is a
--- Phase 3 dependency. It lands in 002_vectors.sql. Extension loading is
+-- loaded separately. It lands in 002_vectors.sql. Extension loading is
 -- available on this machine's Python (verified), so this is scheduling, not a
 -- capability gap.

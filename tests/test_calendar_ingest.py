@@ -1,8 +1,7 @@
 """Calendar ingestion — offline, no network.
 
-Every Google response here is shaped like a real one. The traps this covers are
-the ones docs/phase-6-ingestion.md §3 lists, and each of them is silent in
-production: a sync token saved a page early skips events forever, a 410 treated
+Every Google response here is shaped like a real one. Each trap it covers is
+silent in production: a sync token saved a page early skips events forever, a 410 treated
 as fatal stops the ingester permanently, a cancellation not applied leaves a
 meeting you will plan around.
 """

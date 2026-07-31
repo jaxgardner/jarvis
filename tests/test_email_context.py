@@ -1,9 +1,9 @@
 """Email as assistant context.
 
-This is the half of Gmail ingestion that docs/phase-6-ingestion.md §4 did not
-specify. §4 routes mail exclusively into `proposals`, which is right for
-writes — nothing a model extracted should reach `events` unattended — but it
-leaves the assistant unable to answer "did the landlord email me back?".
+This is the half of Gmail ingestion the original design did not specify. It
+routed mail exclusively into `proposals`, which is right for writes — nothing
+a model extracted should reach `events` unattended — but it leaves the
+assistant unable to answer "did the landlord email me back?".
 
 These tests pin the two properties that make that safe: mail is searchable, and
 mail is never mistaken for something the user said.

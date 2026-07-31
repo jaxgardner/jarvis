@@ -1,4 +1,4 @@
--- Phase 7: record what each utterance actually cost.
+-- Record what each utterance actually cost.
 --
 -- Principle 5 says latency is a budget measured per hop. Money is the other
 -- budget, and until now it was invisible: reconstructing a month's spend meant

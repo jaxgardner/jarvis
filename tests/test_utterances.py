@@ -1,4 +1,4 @@
-"""The design doc's Phase 1 test set, run end-to-end against live Haiku.
+"""The router test set, run end-to-end against live Haiku.
 
 Re-run after every change to the router prompt or tool definitions — this is
 the regression suite for routing decisions, which are the part of the system

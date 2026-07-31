@@ -23,10 +23,10 @@ wrong, say so — don't silently do it differently.
 ## Layout
 
     app/         FastAPI: routes, Haiku router, handlers, reply templates
-    mcp/         jarvis-mcp stdio server            (Phase 3)
-    worker/      claude -p job runner               (Phase 3)
-    scheduler/   reminder firer, no LLM             (Phase 2)
-    ingest/      Google Calendar + Gmail importers  (Phase 6)
+    mcp/         jarvis-mcp stdio server
+    worker/      claude -p job runner
+    scheduler/   reminder firer, no LLM
+    ingest/      Google Calendar + Gmail importers
     migrations/  numbered .sql, applied by migrate.py
     tests/
 
@@ -37,9 +37,9 @@ committed and survives a re-clone.
 ## Schema
 
 See `migrations/001_init.sql` — it is the authoritative copy, applied in full
-during Phase 0. Domain tables: `events`, `reminders`, `people`, `projects`,
+up front. Domain tables: `events`, `reminders`, `people`, `projects`,
 `notes`. Operational: `utterances`, `mutations`, `jobs`. Search: `notes_fts`
-(external-content FTS5 + three sync triggers). Ingestion (Phase 6):
+(external-content FTS5 + three sync triggers). Ingestion:
 `sync_state`, `proposals`, `email_messages` + `email_fts`.
 
 Timestamps are **ISO 8601 with offset**. Never naive local time, never a bare
@@ -60,7 +60,7 @@ Schema subtleties worth not rediscovering:
   accepting a proposal is undoable, and `/undo` reverses an insert with a hard
   delete, which a RESTRICT reference refuses.
 
-## Ingestion (Phase 6)
+## Ingestion
 
 Read-only, one direction. Voice events stay `source='voice'` and are never
 pushed to Google. Two sources, two very different postures:
@@ -133,8 +133,8 @@ deep path runs on the Claude Code subscription, not API credits.
 
 Auth is a bearer token: either `JARVIS_TOKEN` (shared — the Shortcut uses it,
 and it is what enrolls a device) or a per-device token minted by `POST
-/devices` and returned exactly once. Only the sha256 is stored. Details in
-`docs/phase-7-ios.md`.
+/devices` and returned exactly once. Only the sha256 is stored. The
+implementation is `app/devices.py`.
 
 ### Fast-path router
 
@@ -176,7 +176,8 @@ Deterministic, and it saves a round trip.
 - **Push is ntfy**, not Pushover. One `POST {NTFY_SERVER}/{NTFY_TOPIC}`. The
   topic name is the only secret — treat it as a password.
 - Python is pinned to **3.12** (not the system 3.14) because `ctranslate2` and
-  the Kokoro stack trail new CPython on prebuilt wheels. Matters at Phase 4.
+  the Kokoro stack trail new CPython on prebuilt wheels. Matters if local TTS
+  ever lands.
 
 ## Conventions
 
