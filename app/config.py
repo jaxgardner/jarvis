@@ -95,6 +95,28 @@ def apns_key_path() -> Path:
     return path
 
 
+# ── Google ingestion (Phase 6) ────────────────────────────
+# A "Desktop app" OAuth client. The client secret is not actually secret for
+# this client type — Google says so, and it ships inside every installed app —
+# but it still lives in .env rather than the repo, because there is no upside
+# to publishing it and it pairs with a refresh token that IS a real credential.
+
+_GOOGLE_CLIENT_ID = _get("GOOGLE_CLIENT_ID")
+_GOOGLE_CLIENT_SECRET = _get("GOOGLE_CLIENT_SECRET")
+
+
+def google_client_id() -> str:
+    return _require("GOOGLE_CLIENT_ID")
+
+
+def google_client_secret() -> str:
+    return _require("GOOGLE_CLIENT_SECRET")
+
+
+def google_configured() -> bool:
+    return bool(_GOOGLE_CLIENT_ID and _GOOGLE_CLIENT_SECRET)
+
+
 def configured() -> dict[str, bool]:
     """Which secrets are present. Used by /health — never returns the values."""
     return {
@@ -102,4 +124,5 @@ def configured() -> dict[str, bool]:
         "jarvis_token": bool(_JARVIS_TOKEN),
         "ntfy_topic": bool(_NTFY_TOPIC),
         "apns": apns_configured(),
+        "google": google_configured(),
     }

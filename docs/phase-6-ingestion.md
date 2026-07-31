@@ -70,6 +70,45 @@ untenable, both sources have a no-OAuth fallback:
 
 Do not build both paths. Build OAuth; write down that this exists.
 
+### Running the spike
+
+Built: `ingest/google_auth.py`. Three things to do in
+[console.cloud.google.com](https://console.cloud.google.com), then two
+commands.
+
+1. **New project** (any name). Then **APIs & Services → Library** and enable
+   **Google Calendar API** and **Gmail API**. Ingestion fails with a
+   confusing 403 if the API is off, rather than saying so.
+
+2. **APIs & Services → OAuth consent screen.** User type *External* (a
+   personal `@gmail.com` account has no Workspace to be Internal to). Add
+   yourself as a test user. Then — the step this whole section is about —
+   **Publishing status → Publish app → In production.** It stays unverified
+   and shows a warning screen you click through; that is expected and fine
+   for a single-user app.
+
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID →
+   Desktop app.** Copy the client ID and secret into `.env` as
+   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Desktop clients may redirect
+   to any loopback port, so `http://127.0.0.1:8765/` needs no registering.
+
+Then, on the Mini (it opens a browser):
+
+    uv run python -m ingest.google_auth --authorize
+
+The refresh token lands in `~/Library/Application Support/jarvis/google_token.json`
+at mode 600 — beside the database and the APNs `.p8`, never in the repo.
+
+**Then put a reminder in Jarvis for eight days out and run:**
+
+    uv run python -m ingest.google_auth --check
+
+It forces a real refresh rather than reusing a cached access token — a cached
+one would pass for an hour after the credential died — and then reads your
+calendar list. Exit 0 means the credential survived and the phase can proceed.
+Exit 1 on day 8 means the publishing status didn't take, and no importer
+should be written until it does.
+
 ### One thing the Google path buys for free
 
 The EventKit design had a real problem: Calendar access is TCC-protected and
@@ -185,10 +224,11 @@ Delivered by APNs, so it can carry actions the way fired reminders already do.
 
 ## 6. Work
 
-- [ ] **Auth spike first.** Google Cloud project, consent screen **in
-      production**, one refresh token, and prove it still works on day 8.
-      Everything else is wasted if this is wrong.
-- [ ] `migrations/005_ingest.sql` — `sync_state`, `proposals`.
+- [x] **Auth spike.** `ingest/google_auth.py` — loopback + PKCE, refresh, and
+      a `--check` that forces a real refresh. Console steps in §2.
+- [ ] **Run it, then run `--check` on day 8.** This is the gate. Everything
+      below is wasted if the credential doesn't survive a week.
+- [x] `migrations/005_ingest.sql` — `sync_state`, `proposals`.
 - [ ] `ingest/calendar.py` — full fetch, then `syncToken`; handle `cancelled`.
 - [ ] launchd plist, same shape as the scheduler; heartbeat so silence is
       detectable.
