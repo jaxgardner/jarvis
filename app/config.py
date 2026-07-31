@@ -60,10 +60,46 @@ def ntfy_topic() -> str:
     return _require("NTFY_TOPIC")
 
 
+# ── push (Phase 7) ────────────────────────────────────────
+# PUSH_BACKENDS is a comma-separated list, and the default is deliberately
+# "ntfy" alone. The APNs cutover is opt-in and expected to run as
+# "ntfy,apns" for a fortnight: "reminders silently stop firing" is on the
+# risk table, and swapping the push backend is precisely how that happens.
+
+APNS_KEY_PATH = _get("APNS_KEY_PATH")
+APNS_KEY_ID = _get("APNS_KEY_ID")
+APNS_TEAM_ID = _get("APNS_TEAM_ID")
+APNS_BUNDLE_ID = _get("APNS_BUNDLE_ID")
+APNS_ENV = (_get("APNS_ENV") or "prod").lower()
+
+
+def push_backends() -> list[str]:
+    raw = _get("PUSH_BACKENDS") or "ntfy"
+    return [b.strip().lower() for b in raw.split(",") if b.strip()]
+
+
+def apns_configured() -> bool:
+    return all(
+        (APNS_KEY_PATH, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID)
+    ) and Path(APNS_KEY_PATH).expanduser().is_file()
+
+
+def apns_key_path() -> Path:
+    # Reads the module constant rather than the environment so that the
+    # "is it configured" check and the "load it" path can never disagree.
+    if not APNS_KEY_PATH:
+        raise RuntimeError("APNS_KEY_PATH is unset. Fill it in in .env.")
+    path = Path(APNS_KEY_PATH).expanduser()
+    if not path.is_file():
+        raise RuntimeError(f"APNS_KEY_PATH does not exist: {path}")
+    return path
+
+
 def configured() -> dict[str, bool]:
     """Which secrets are present. Used by /health — never returns the values."""
     return {
         "anthropic_api_key": bool(_ANTHROPIC_API_KEY),
         "jarvis_token": bool(_JARVIS_TOKEN),
         "ntfy_topic": bool(_NTFY_TOPIC),
+        "apns": apns_configured(),
     }

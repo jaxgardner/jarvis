@@ -163,6 +163,50 @@ def undo_last(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     return f"Undone — I reverted that {label}."
 
 
+# ── notification actions (Phase 7) ────────────────────────
+# Driven by the buttons on a fired reminder, not by an utterance — hence
+# utterance_id=None. They still go through `mutations`, so a fat-fingered
+# Snooze on a lock screen is undoable like everything else.
+
+
+def snooze(conn, reminder_id: int, minutes: int, tz_name: str) -> str | None:
+    """Push a fired reminder out and put it back in the queue.
+
+    Recurrence is deliberately dropped from the snoozed row. The scheduler
+    already inserted the next occurrence when this one fired; leaving the rule
+    attached would make the snoozed copy insert a *second* one when it fires
+    again, and recurring reminders would quietly multiply.
+    """
+    row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+    if row is None:
+        return None
+
+    fire_at = timeutil.to_utc_iso(
+        timeutil.now("UTC") + timedelta(minutes=max(1, min(minutes, 24 * 60)))
+    )
+    mutations.update(
+        conn,
+        None,
+        "reminders",
+        reminder_id,
+        {"fire_at": fire_at, "status": "pending", "fired_at": None, "recurrence": None},
+    )
+    return f"Snoozed — I'll remind you again {timeutil.speak_datetime(fire_at, tz_name)}."
+
+
+def ack(conn, reminder_id: int) -> str | None:
+    """Mark a reminder dealt with. This is the only thing that ever writes
+    'acked' — the status migration 002 declared and nothing has set until now.
+    """
+    row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+    if row is None:
+        return None
+    if row["status"] == "acked":
+        return "Already done."  # idempotent: a double-tap is not an error
+    mutations.update(conn, None, "reminders", reminder_id, {"status": "acked"})
+    return "Done."
+
+
 # ── reads ─────────────────────────────────────────────────
 
 

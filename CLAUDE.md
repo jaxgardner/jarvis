@@ -77,6 +77,21 @@ engine — no markdown, no lists, no emoji.
 | `GET /jobs/{id}` | Poll deep-path status |
 | `GET /health` | Liveness for launchd and uptime checks |
 | `GET /metrics` | p50/p95 latency by route, last 24h |
+| `POST /devices` | Register a device (or refresh its APNs token) |
+| `GET /devices`, `DELETE /devices/{id}` | List, and revoke a lost one |
+| `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
+| `GET /activity` | Utterances + what each one changed; drives swipe-to-undo |
+| `GET /jobs` | Deep-path history (results truncated; full text on `/jobs/{id}`) |
+
+`/metrics` takes `?days=N` and includes a `spend` block — token counts are
+stored on `utterances` and costed at read time, so a price change re-costs
+history instead of freezing the old rate. Only the fast path is counted; the
+deep path runs on the Claude Code subscription, not API credits.
+
+Auth is a bearer token: either `JARVIS_TOKEN` (shared — the Shortcut uses it,
+and it is what enrolls a device) or a per-device token minted by `POST
+/devices` and returned exactly once. Only the sha256 is stored. Details in
+`docs/phase-7-ios.md`.
 
 ### Fast-path router
 

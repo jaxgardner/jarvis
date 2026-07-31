@@ -7,7 +7,11 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "anthropic>=0.40",
-    "httpx>=0.27",
+    # APNs is HTTP/2-only, hence the extra. PyJWT signs the ES256 provider
+    # token — hand-rolling that means hand-rolling the DER-to-raw signature
+    # conversion, which is the one part of this that fails silently.
+    "httpx[http2]>=0.27",
+    "pyjwt[crypto]>=2.9",
     "python-dotenv>=1.0",
     "mcp>=2.0.0",
 ]

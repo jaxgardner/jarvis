@@ -196,11 +196,17 @@ def run_job(job: dict) -> dict:
     if denials:
         print(f"job {job['id']}: {len(denials)} permission denial(s)", file=sys.stderr)
 
+    # job_id turns this into a deep link on iOS: tapping opens the job's full
+    # result rather than leaving the summary in the notification body as the
+    # only copy you ever see.
     notify.push(
         _summarize(result),
         title="Job finished",
         tags="white_check_mark",
         priority="default",
+        category="JOB",
+        data={"job_id": job["id"], "kind": "job"},
+        collapse_id=f"job-{job['id']}",
     )
     return {
         "job_id": job["id"],
@@ -221,6 +227,9 @@ def _handle_failure(job: dict, error: str) -> dict:
         title="Job failed",
         tags="x",
         priority="high",
+        category="JOB",
+        data={"job_id": job["id"], "kind": "job"},
+        collapse_id=f"job-{job['id']}",
     )
     return {"job_id": job["id"], "status": "failed", "error": error}
 

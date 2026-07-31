@@ -120,11 +120,19 @@ def tick(tz_name: str | None = None) -> dict:
             continue
 
         late = " (delayed)" if overdue > timedelta(minutes=5) else ""
+        # category + reminder_id are what make the notification actionable on
+        # iOS: the app registers a 'REMINDER' category with Snooze / Done /
+        # Undo buttons, and the id tells those buttons what they are acting
+        # on. Both are ignored by the ntfy backend, so this stays correct
+        # during the dual-send window.
         ok = notify.push(
             row["body"],
             title=f"Reminder{late}",
             tags="alarm_clock",
             priority="default",
+            category="REMINDER",
+            data={"reminder_id": row["id"], "kind": "reminder"},
+            collapse_id=f"reminder-{row['id']}",
         )
 
         with transaction() as conn:

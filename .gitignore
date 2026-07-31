@@ -6,3 +6,10 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+
+# Xcode. The .p8 is a credential and belongs beside the database, outside the
+# repo — this is a backstop in case one ever lands here by accident.
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.p8

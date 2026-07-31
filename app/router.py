@@ -14,9 +14,22 @@ from datetime import datetime, timedelta
 
 import anthropic
 
-from app import config, timeutil
+from app import config, timeutil, usage
 
 MODEL = "claude-haiku-4-5"
+
+# USD per million tokens, for the model above. Stored here rather than in the
+# database because prices change and token counts don't — /metrics multiplies
+# at read time, so a price change re-costs history correctly instead of
+# freezing whatever the rate happened to be on the day.
+PRICE_PER_MTOK = {"input": 1.00, "output": 5.00}
+
+
+def cost_usd(input_tokens: int, output_tokens: int) -> float:
+    return (
+        input_tokens * PRICE_PER_MTOK["input"]
+        + output_tokens * PRICE_PER_MTOK["output"]
+    ) / 1_000_000
 
 TOOLS: list[dict] = [
     {
@@ -330,6 +343,7 @@ def route(text: str, tz_name: str) -> tuple[str, dict]:
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": text}],
     )
+    usage.record(response.usage)
     for block in response.content:
         if block.type == "tool_use":
             return block.name, dict(block.input)
@@ -354,4 +368,5 @@ def answer(question: str, context: str, tz_name: str) -> str:
             {"role": "user", "content": f"Data:\n{context}\n\nQuestion: {question}"}
         ],
     )
+    usage.record(response.usage)
     return "".join(b.text for b in response.content if b.type == "text").strip()
