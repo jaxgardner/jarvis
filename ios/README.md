@@ -28,7 +28,7 @@ The project builds and runs in the simulator without any of this — but with
 | `JarvisApp.swift` | Entry point; picks Setup or Talk based on enrollment |
 | `SetupView.swift` | One-time enrollment, plus the (thin) settings sheet |
 | `TalkView.swift` | The screen that replaces the Shortcut |
-| `Transcriber.swift` | `SpeechAnalyzer` / `SpeechTranscriber`, on device |
+| `Transcriber.swift` | `SpeechAnalyzer` / `SpeechTranscriber`, on device, plus the pause detector |
 | `Speaker.swift` | `AVSpeechSynthesizer` — speaks `reply` verbatim |
 | `JarvisAPI.swift` | The server contract |
 | `Keychain.swift` | Where the device token lives. Not `UserDefaults` |
@@ -56,6 +56,22 @@ Re-capture a fixture after changing an endpoint:
 
     curl -s localhost:8000/activity -H "Authorization: Bearer $JARVIS_TOKEN" \
       > ios/JarvisTests/Fixtures/activity.json
+
+## Sending
+
+Tap the mic, talk, stop talking. The app detects the pause and sends — there is
+no second tap and no Send button, because a confirmation step would make this
+slower than the Shortcut it replaces.
+
+Tapping the button while it is listening still sends immediately, and that is
+the path to use in a room too loud to measure. Settings has the pause length
+(0.8 / 1.2 / 2.0 seconds) and a switch to turn the whole thing off, which puts
+the second tap back.
+
+The detection is energy-based and lives on the audio thread; `docs/phase-7-ios.md`
+has the reasoning, and `JarvisTests/EndpointerTests.swift` pins the cases that
+matter — a café, a mic that opens mid-sentence, a breath mid-reminder, and a
+door slam that produces no text.
 
 ## The Action Button
 
@@ -107,6 +123,12 @@ device-token auth, `/agenda` shapes, snooze, ack, undo, revocation.
 **Untested on hardware:** the microphone path and APNs delivery. Neither can
 run in a simulator. `Transcriber` in particular — audio format conversion into
 `SpeechAnalyzer` is the part most likely to need adjustment on a real device.
+
+The pause detector is tested against synthetic buffers, which covers its logic
+but not its constants: whether 0.006 RMS is really the floor of a quiet room,
+and whether 0.03 clears yours, are questions only a real microphone answers. If
+it sends mid-sentence, raise the pause length first; if it never sends, the room
+is louder than the ceiling and `adaptiveCeiling` is the number to look at.
 
 ## TestFlight
 

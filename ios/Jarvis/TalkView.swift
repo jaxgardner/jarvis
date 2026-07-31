@@ -1,19 +1,25 @@
 import SwiftUI
 
-/// The screen that has to replace the Shortcut. Tap, talk, tap, done.
+/// The screen that has to replace the Shortcut. Tap, talk, done.
 ///
 /// One thing deliberately absent: a Send button. The Shortcut's whole
 /// ergonomic advantage is that it is one gesture, and adding a confirmation
-/// step would make this slower than the thing it replaces.
+/// step would make this slower than the thing it replaces. The second tap is
+/// gone for the same reason — stopping talking is the signal, and the mic
+/// button stays as the manual override for a noisy room.
 struct TalkView: View {
     @EnvironmentObject private var api: JarvisAPI
     @StateObject private var transcriber = Transcriber()
     @StateObject private var speaker = Speaker()
     @ObservedObject private var router = LaunchRouter.shared
 
+    @AppStorage(VoiceSettings.autoSendKey) private var autoSend = true
+    @AppStorage(VoiceSettings.pauseKey) private var pauseToSend = VoiceSettings.defaultPause
+
     @State private var reply = ""
     @State private var detail = ""
     @State private var isSending = false
+    @State private var isFinishing = false
     @State private var error: String?
     @State private var showingSettings = false
 
@@ -58,6 +64,11 @@ struct TalkView: View {
             .task { await startIfRequested() }
             .onChange(of: router.shouldStartListening) { _, _ in
                 Task { await startIfRequested() }
+            }
+            // You stopped talking. Same path as tapping the button.
+            .onChange(of: transcriber.didEndpoint) { _, reached in
+                guard reached else { return }
+                Task { await finish() }
             }
         }
     }
@@ -121,24 +132,40 @@ struct TalkView: View {
         }
         .disabled(isSending)
         .sensoryFeedback(.impact, trigger: transcriber.isListening)
-        .accessibilityLabel(transcriber.isListening ? "Stop listening" : "Talk to Jarvis")
+        // "Send now", not "Stop listening": tapping while listening has always
+        // sent, and with the pause detector on it is specifically the way to
+        // send before the pause elapses.
+        .accessibilityLabel(transcriber.isListening ? "Send now" : "Talk to Jarvis")
     }
 
     private func toggle() async {
         error = nil
         if transcriber.isListening {
-            let text = await transcriber.stop()
-            await send(text)
+            await finish()
         } else {
             speaker.stop()
             reply = ""
             detail = ""
             do {
-                try await transcriber.start()
+                try await transcriber.start(pauseToSend: autoSend ? pauseToSend : nil)
             } catch {
                 self.error = error.localizedDescription
             }
         }
+    }
+
+    /// Stop capturing and send. Reachable two ways — the pause detector and
+    /// the button — which can land within milliseconds of each other when you
+    /// tap just as you finish speaking. `isFinishing` is set before the first
+    /// suspension point, so the loser of that race returns instead of posting
+    /// the same utterance twice.
+    private func finish() async {
+        guard transcriber.isListening, !isFinishing else { return }
+        isFinishing = true
+        defer { isFinishing = false }
+
+        let text = await transcriber.stop()
+        await send(text)
     }
 
     private func send(_ text: String) async {

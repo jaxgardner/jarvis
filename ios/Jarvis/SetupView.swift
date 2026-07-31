@@ -80,6 +80,24 @@ struct SetupView: View {
     }
 }
 
+/// Where the endpointing preference lives. `UserDefaults` rather than the
+/// Keychain — it is a preference, not a secret — and named in one place so the
+/// view that reads it and the view that writes it cannot drift apart.
+enum VoiceSettings {
+    static let autoSendKey = "jarvis.autoSend"
+    static let pauseKey = "jarvis.pauseToSend"
+
+    /// A second of true silence is already a long gap in speech; shorter than
+    /// this and an ordinary mid-sentence breath sends half a reminder.
+    static let defaultPause: Double = 1.2
+
+    static let choices: [(label: String, seconds: Double)] = [
+        ("Quick", 0.8),
+        ("Normal", 1.2),
+        ("Relaxed", 2.0),
+    ]
+}
+
 /// Post-enrollment settings. Deliberately thin: this is not the dashboard,
 /// which is Phase 7d.
 struct SettingsView: View {
@@ -87,9 +105,33 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingForget = false
 
+    @AppStorage(VoiceSettings.autoSendKey) private var autoSend = true
+    @AppStorage(VoiceSettings.pauseKey) private var pauseToSend = VoiceSettings.defaultPause
+
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Send when I stop talking", isOn: $autoSend)
+
+                    if autoSend {
+                        Picker("Pause length", selection: $pauseToSend) {
+                            ForEach(VoiceSettings.choices, id: \.seconds) { choice in
+                                Text(choice.label).tag(choice.seconds)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                } header: {
+                    Text("Voice")
+                } footer: {
+                    // Worth stating: the button does not go away, and in a loud
+                    // room it is the reliable path.
+                    Text(autoSend
+                         ? "Tap the mic, talk, and Jarvis sends when you pause. Tapping the button still sends immediately."
+                         : "The mic stays on until you tap the button again.")
+                }
+
                 Section("Mini address") {
                     Text(api.host).foregroundStyle(.secondary)
                 }

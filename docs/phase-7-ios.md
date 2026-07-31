@@ -171,7 +171,7 @@ Swift.
 
 | Screen | Source | Notes |
 | :-- | :-- | :-- |
-| Talk | `POST /say` | Mic button, transcript, reply spoken via `AVSpeechSynthesizer` |
+| Talk | `POST /say` | Mic button, transcript, reply spoken via `AVSpeechSynthesizer`. Sends when you stop talking |
 | Agenda | `GET /agenda` | Use the server's `when` strings — do not re-format dates client-side |
 | Activity | recent utterances + mutations | Swipe-to-undo → `POST /undo` |
 | Jobs | `GET /jobs/{id}` | Deep-path status, live |
@@ -181,6 +181,36 @@ Swift.
 
 iOS 26's `SpeechAnalyzer` / `SpeechTranscriber` — faster and more accurate than
 the old `SFSpeechRecognizer`, which stays as the fallback path. On-device.
+
+### Endpointing — you stop talking, it sends
+
+Added 2026-07-31. Tap, talk, done: the second tap was the worst thing about the
+screen, because it put a deliberate action between finishing a sentence and
+getting an answer. The button stays as an immediate send and as the override
+for a room too loud to measure.
+
+**Frame energy, not the transcript.** The transcriber's own results look like
+the obvious signal and are the wrong one — it emits when it has something to
+say, so "no new text" means either a pause or a model still working, and those
+want opposite responses. RMS over the input buffers answers the question
+directly and about a second sooner. `Endpointer` in `Transcriber.swift`.
+
+Three things it has to survive, all of them in `EndpointerTests`:
+
+- **The mic opening mid-sentence.** The Action Button path launches the app
+  *because* you are already talking, so the first audio the detector ever sees
+  is speech. Any threshold calibrated from an average of that lands above the
+  speaker and goes deaf for the whole utterance. The floor is a running minimum
+  with a hard ceiling for this reason.
+- **A loud room.** A fixed threshold hears a café as continuous speech and never
+  ends anything. Hence a measured floor at all.
+- **Energy that produces no text** — a door, a cough. It re-arms and keeps
+  listening rather than ending a session that captured nothing.
+
+Silence is 1.2s by default, adjustable in Settings (0.8 / 1.2 / 2.0) or off
+entirely. Shorter than ~1s and an ordinary mid-sentence breath sends half a
+reminder, which is the expensive failure: firing late costs a second, firing
+early costs the time on the end of "remind me to call the dentist at".
 
 ### App Intents to ship
 
