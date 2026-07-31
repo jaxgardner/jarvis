@@ -1,0 +1,18 @@
+// Fill these in once. Everything else in the project reads from here, so
+// there is no bundle ID or team ID buried in project.pbxproj to go stale.
+//
+// JARVIS_BUNDLE_ID must match APNS_BUNDLE_ID in the server's .env — APNs
+// rejects a push whose apns-topic doesn't match the app ID, and the error
+// surfaces as a silent non-delivery.
+//
+// The bundle ID below is a suggestion. It has to be globally unique across
+// the App Store and has to match the App ID you register in the Developer
+// portal, so change it here FIRST if you want something else, then register
+// that exact string.
+
+JARVIS_BUNDLE_ID = com.jaxongardner.jarvis
+
+// Read from the Apple Development certificate already in this machine's
+// keychain (the OU field). If you belong to more than one team, check which
+// one owns the App ID: developer.apple.com/account → Membership details.
+JARVIS_DEVELOPMENT_TEAM = Z77Q73L56Q

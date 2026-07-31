@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Substituted from APS_ENVIRONMENT: 'development' in Debug, 'production'
+	     in Release. This entitlement is what decides which APNs environment
+	     the device token belongs to, so it has to agree with the apns_env the
+	     app reports to the server — which is switched on #if DEBUG in
+	     JarvisAPI.apnsEnvironment. Hardcoding 'production' here is the classic
+	     "push works on TestFlight but not from Xcode" bug. -->
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+</dict>
+</plist>

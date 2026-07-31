@@ -1,0 +1,1 @@
+{"fast":{"count":2,"p50":612,"p95":612,"max":612},"deep":{"count":0},"spend":{"model":"claude-haiku-4-5","utterances":1,"model_calls":1,"input_tokens":2557,"output_tokens":88,"usd":0.003,"usd_per_utterance":0.003,"usd_per_month_at_this_rate":0.09}}

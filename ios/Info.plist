@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Partial plist: GENERATE_INFOPLIST_FILE=YES merges the usual generated
+	     keys into this. Only what the build settings cannot express lives
+	     here, and App Transport Security is the one thing that qualifies.
+
+	     The API is plain HTTP over Tailscale. That is not the security hole it
+	     looks like — WireGuard already encrypts and authenticates the link,
+	     there is no port forward, and terminating TLS on the Mini would mean a
+	     certificate for a .ts.net name. But ATS blocks cleartext by default,
+	     so the tailnet needs an explicit exception. Scoped to ts.net rather
+	     than NSAllowsArbitraryLoads, which would disable ATS everywhere. -->
+	<!-- Siri has to recognise the app's name in a spoken phrase, and every
+	     App Shortcut phrase is required to contain it. These are the
+	     pronunciations it will also accept. -->
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Jarvis</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>jar viss</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Jarvis Assistant</string>
+		</dict>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

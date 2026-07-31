@@ -1,0 +1,1 @@
+{"status":"ok","db":{"ok":true,"migrations_applied":4},"configured":{"anthropic_api_key":true,"jarvis_token":true,"ntfy_topic":true,"apns":true}}
