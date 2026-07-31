@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis API — LaunchDaemon (FileVault option A).
+
+  A LaunchDaemon, not a LaunchAgent: FileVault is on, so auto-login is
+  unavailable and no GUI session exists after a reboot. A LaunchAgent would
+  never start.
+
+  UserName runs it as jaxongardner rather than root so it can read the
+  chmod-600 .env and write to ~/Library/Logs. Keychain access is restricted
+  for daemons, which is why secrets live in .env in the first place.
+
+  Install:  sudo ./deploy/install-daemon.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/uvicorn</string>
+        <string>app.main:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8000</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't hammer the log if it's crash-looping on a config error. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/api.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/api.err.log</string>
+</dict>
+</plist>
