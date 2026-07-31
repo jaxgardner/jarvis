@@ -119,7 +119,46 @@ def test_command_pins_mcp_config_strictly():
 
 
 def test_summary_is_one_line():
-    assert worker._summarize("first line\nsecond line\nthird") == "first line"
+    assert worker._summarize("first line.\nsecond line.\nthird.").startswith("first line.")
+
+
+def test_summary_drops_a_lead_in_that_promises_a_table():
+    """Real failure: the agent opened "Saved as note 3. Here's the comparison:"
+    with a markdown table under it. Keeping the colon clause either dangles
+    mid-thought or glues the label onto the next paragraph, asserting a
+    comparison the agent never made."""
+    out = worker._summarize(
+        "Saved as note 3. Here's the comparison:\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+    )
+    assert out == "Saved as note 3."
+
+
+def test_summary_does_not_split_decimals():
+    """A naive [.!?] split ends the summary at "Its 27." mid-measurement."""
+    assert worker._summarize("The desk is 27.2 inches tall.") == "The desk is 27.2 inches tall."
+
+
+def test_summary_strips_markdown_emphasis():
+    assert worker._summarize("Saved **three** desks to `notes`.") == "Saved three desks to notes."
+
+
+def test_summary_of_structure_only_output_says_something():
+    assert worker._summarize("- one\n- two") == "Done."
+    assert worker._summarize("Here are the results:") == "Done."
+
+
+def test_auth_configured_reports_headless_token(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    assert worker.auth_configured() is False
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-x")
+    assert worker.auth_configured() is True
+
+
+def test_child_env_passes_the_headless_token(monkeypatch):
+    """A LaunchDaemon cannot read the login keychain, so the token from
+    `claude setup-token` is the only way the worker authenticates."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-x")
+    assert worker._child_env({"utterance_id": None})["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-x"
 
 
 def test_summary_truncates_rather_than_flooding_the_notification():

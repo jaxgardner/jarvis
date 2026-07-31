@@ -19,6 +19,7 @@ Two things here are load-bearing and easy to get wrong:
 
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -58,9 +59,24 @@ def _child_env(job: dict) -> dict:
     # See module docstring — this is what keeps the deep path on the
     # subscription instead of billing API credits.
     env.pop("ANTHROPIC_API_KEY", None)
+
+    # Claude Code's normal OAuth credentials live in the login keychain, which
+    # a LaunchDaemon cannot read — it runs outside any login session, so the
+    # CLI reports "Not logged in · Please run /login" and exits 1. A long-lived
+    # token from `claude setup-token` lives in .env instead, readable by the
+    # daemon user, and still bills against the subscription.
+    token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if token:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+
     if job.get("utterance_id"):
         env["JARVIS_UTTERANCE_ID"] = str(job["utterance_id"])
     return env
+
+
+def auth_configured() -> bool:
+    """Whether the worker can authenticate headlessly at all."""
+    return bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip())
 
 
 def _command(job: dict, session_id: str, resume: bool) -> list[str]:
@@ -128,9 +144,10 @@ def run_job(job: dict) -> dict:
         return _handle_failure(job, "claude CLI not found on PATH")
 
     if completed.returncode != 0:
-        return _handle_failure(
-            job, f"exit {completed.returncode}: {completed.stderr.strip()[:400]}"
-        )
+        # The CLI reports auth and config failures on stdout, not stderr, so a
+        # stderr-only error message reads as a bare "exit 1" with no cause.
+        detail = (completed.stderr.strip() or completed.stdout.strip() or "no output")
+        return _handle_failure(job, f"exit {completed.returncode}: {detail[:1500]}")
 
     try:
         payload = json.loads(completed.stdout)
@@ -180,9 +197,48 @@ def _handle_failure(job: dict, error: str) -> dict:
 
 def _summarize(result: str, limit: int = 240) -> str:
     """One line for the push. The full text stays in the database and is read
-    back via GET /jobs/{id} — a notification is not the delivery mechanism."""
-    first = next((ln.strip() for ln in result.splitlines() if ln.strip()), "Done.")
-    return first if len(first) <= limit else first[: limit - 1] + "…"
+    back via GET /jobs/{id} — a notification is not the delivery mechanism.
+
+    Taking the literal first line is not enough. Agents routinely open with a
+    lead-in that ends in a colon ("Saved as note 3. Here's the comparison:")
+    and put the substance in a markdown table underneath, so a first-line
+    summary reads as a sentence that got cut off mid-thought. This drops
+    markdown structure, works in whole sentences, and refuses to end on a
+    dangling colon.
+    """
+    sentences: list[str] = []
+    for line in result.splitlines():
+        stripped = line.strip()
+        # Skip table rows, headings, fences, rules, quotes, and list bullets —
+        # they carry the detail, but none of it survives one line of text.
+        if not stripped or stripped.startswith(("|", "#", "```", "---", ">", "*", "-")):
+            continue
+        # Split sentences WITHIN the line, not across the flattened document.
+        # A lead-in colon is line-final in the source; once lines are joined it
+        # becomes sentence-internal and is no longer detectable.
+        # Split on a terminator followed by whitespace, so decimals survive —
+        # a naive [.!?] split turns "27.2 inches" into a sentence ending
+        # "Its 27." and the summary trails off mid-measurement.
+        for raw in re.split(r"(?<=[.!?])\s+", stripped):
+            sentence = raw.strip()
+            if sentence and not sentence.endswith(":"):
+                sentences.append(sentence)
+
+    if not sentences:
+        return "Done."
+
+    summary = ""
+    for sentence in sentences:
+        candidate = f"{summary} {sentence}".strip() if summary else sentence
+        if len(candidate) > limit:
+            break
+        summary = candidate
+    if not summary:
+        summary = sentences[0][: limit - 1].rstrip() + "…"
+
+    # Replies are read aloud or shown as a plain notification — strip emphasis
+    # markers rather than speaking "asterisk asterisk".
+    return re.sub(r"[*_`]{1,2}", "", summary).strip()
 
 
 def main() -> int:
