@@ -120,9 +120,28 @@ def test_command_uses_auto_permission_mode():
 def test_command_pins_mcp_config_strictly():
     """Without --strict-mcp-config the CLI also loads the user's own MCP
     servers, handing the job tools this code never granted."""
+    assert "--strict-mcp-config" in worker._command({"prompt": "x"}, "s", resume=False)
+
+
+def test_full_access_omits_the_allowlist_entirely():
+    """ALLOWED_TOOLS=None means no --allowedTools flag, so the agent gets the
+    default tool set including Bash, gated by auto mode rather than by name."""
     cmd = worker._command({"prompt": "x"}, "s", resume=False)
-    assert "--strict-mcp-config" in cmd
-    assert "Bash" not in cmd[cmd.index("--allowedTools") + 1]
+    assert worker.ALLOWED_TOOLS is None
+    assert "--allowedTools" not in cmd
+
+
+def test_allowlist_is_applied_when_set(monkeypatch):
+    """Re-narrowing must still work — this is the one-line rollback."""
+    monkeypatch.setattr(worker, "ALLOWED_TOOLS", "Read,WebSearch")
+    cmd = worker._command({"prompt": "x"}, "s", resume=False)
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,WebSearch"
+
+
+def test_jobs_do_not_run_inside_the_repo():
+    """With a shell available, cwd must not be the directory holding .env."""
+    assert worker.WORK_DIR != REPO_ROOT
+    assert REPO_ROOT not in worker.WORK_DIR.parents
 
 
 def test_summary_is_one_line():

@@ -34,9 +34,26 @@ MAX_ATTEMPTS = 2
 
 MCP_CONFIG = REPO_ROOT / "mcp.json"
 
-# Everything the deep path is allowed to touch. Note mcp__jarvis__* covers the
-# database tools; Bash is deliberately absent.
-ALLOWED_TOOLS = "mcp__jarvis__*,Read,Write,WebSearch,WebFetch"
+# Where jobs run. Deliberately NOT the repo: with full tool access the agent
+# has a shell, and the repo root contains .env — the Anthropic key, the ntfy
+# topic, and the Claude token, all plaintext because FileVault option A rules
+# out the keychain. Running elsewhere means a prompt injection from a fetched
+# page finds a scratch directory rather than credentials. The repo is still
+# readable via --add-dir.
+WORK_DIR = Path.home() / "Library" / "Application Support" / "jarvis" / "work"
+
+# Tool allowlist for the deep path. None = no --allowedTools flag, so the agent
+# gets the full default tool set (Bash included), with --permission-mode auto
+# judging each action — the same shape as an interactive session.
+#
+# Set this back to a comma-separated string to re-narrow it, e.g.
+#   ALLOWED_TOOLS = "mcp__jarvis__*,Read,Write,WebSearch,WebFetch"
+#
+# What full access actually widens: the deep path reads untrusted web content
+# and runs unattended, so a prompt injection in a fetched page now reaches a
+# shell. Keeping .env out of the agent's working directory (see WORK_DIR) is
+# what stops that from also being a credential leak.
+ALLOWED_TOOLS: str | None = None
 
 
 def _claim() -> dict | None:
@@ -92,8 +109,11 @@ def _command(job: dict, session_id: str, resume: bool) -> list[str]:
         # for the user account — the job would get tools this code never
         # granted it.
         "--strict-mcp-config",
-        "--allowedTools",
-        ALLOWED_TOOLS,
+        # The repo is still reachable via --add-dir, so the agent can read
+        # CLAUDE.md and the source; it just doesn't start sitting on top of
+        # .env with a shell.
+        "--add-dir",
+        str(REPO_ROOT),
         # Auto mode: the same classifier-driven permissioning an interactive
         # session uses, rather than dontAsk's flat gate. It judges each action
         # in context (17 allow rules, 65 soft denies, a hard deny on data
@@ -104,6 +124,8 @@ def _command(job: dict, session_id: str, resume: bool) -> list[str]:
         "--permission-mode",
         "auto",
     ]
+    if ALLOWED_TOOLS:
+        cmd += ["--allowedTools", ALLOWED_TOOLS]
     cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
     return cmd
 
@@ -126,6 +148,7 @@ def _requeue(job_id: int, error: str) -> None:
 
 
 def run_job(job: dict) -> dict:
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
     session_id = job.get("session_id") or str(uuid.uuid4())
     resume = bool(job.get("session_id"))
 
@@ -141,7 +164,7 @@ def run_job(job: dict) -> dict:
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
-            cwd=str(REPO_ROOT),
+            cwd=str(WORK_DIR),
             env=_child_env(job),
             check=False,
         )
