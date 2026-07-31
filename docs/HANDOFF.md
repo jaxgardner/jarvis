@@ -101,9 +101,10 @@ review first. Nothing depends on the answer.
 
 ## 3. What to build next
 
-**In order.** Do not start §3.2 before §3.1 has run for two weeks.
+**In order**, because each depends on the last — not because anything
+needs to soak. Build as fast as it goes.
 
-### 3.1 Calendar ingester — *blocked on §2.1 passing on day 8*
+### 3.1 Calendar ingester
 
 Spec: `docs/phase-6-ingestion.md` §3. Schema is already in place (`005`).
 
@@ -121,8 +122,6 @@ Spec: `docs/phase-6-ingestion.md` §3. Schema is already in place (`005`).
   needed to make `/agenda` useful.
 - launchd plist shaped like `com.jarvis.scheduler`; write `sync_state` every
   run so silence is detectable.
-
-Then **two weeks of calendar only** before touching Gmail.
 
 ### 3.2 Gmail → proposals
 

@@ -15,7 +15,8 @@ network-shaped rather than local-shaped. §2 is the consequence.
 ## 1. What gets ingested, in order
 
 One source at a time, read-only, and each one proves dedupe before the next
-starts.
+starts. That ordering is about dependency, not soak time — there is no waiting
+period here.
 
 | Order | Source | Into | Why this order |
 | :-- | :-- | :-- | :-- |
@@ -152,6 +153,40 @@ recurrence support is deliberately limited to `daily` / `weekly:MO,WE`.
 Same shape as `heartbeats`, same purpose: an ingester that stops working
 should be a *detectable* condition, not something noticed a week later.
 
+### Synced writes bypass the mutations helper
+
+This is an exception to an invariant `CLAUDE.md` states flatly ("every write
+goes through one helper"), so it is written down rather than discovered.
+
+The mutations log exists to make **voice** input reversible, because voice is
+lossy and you will mis-hear things. A calendar import is not a user action:
+there is nothing to regret, and `/undo` on a synced row is meaningless because
+the next sync re-adds it. Worse, routing a few hundred rows per sync through
+the log would bury your last real action under them and make `/undo` useless
+for exactly the thing it was built for.
+
+So: `source='calendar'` writes go direct. Voice writes keep the helper.
+Anything a human *accepts* — a Gmail proposal — goes through the helper,
+because that one is a user action.
+
+### Details that are easy to get wrong
+
+- **`showDeleted=true`.** Without it, cancellations are omitted entirely and
+  deleted meetings stay in the agenda forever. It is the whole reason for
+  incremental sync.
+- **Save `nextSyncToken` only after pagination completes.** Only the final
+  page carries it; saving early skips every event on the pages not yet read.
+- **`timeMin` cannot be combined with `syncToken`** — Google rejects the
+  request. The window is baked into the token by the first sync.
+- **HTTP 410 is normal, not a crash.** Google expires sync tokens on its own
+  schedule. Treat it as "drop the cursor and refetch in full"; an ingester
+  that treats it as fatal stops permanently after a quiet week.
+- **All-day events arrive as a bare `YYYY-MM-DD`** with no offset. Anchor them
+  to local midnight in `DEFAULT_TZ` before storing — a naive timestamp
+  violates the schema's rule and sorts wrongly against everything else.
+- **Clear `deleted_at` on update.** An event can be cancelled and then
+  restored; leaving it soft-deleted hides a meeting that is back on.
+
 ### What it must not do
 
 **Read-only, one direction, first release.** Voice-created events stay
@@ -232,7 +267,6 @@ Delivered by APNs, so it can carry actions the way fired reminders already do.
 - [ ] `ingest/calendar.py` — full fetch, then `syncToken`; handle `cancelled`.
 - [ ] launchd plist, same shape as the scheduler; heartbeat so silence is
       detectable.
-- [ ] Two weeks of calendar-only before touching Gmail.
 - [ ] `ingest/gmail.py` + extraction into `proposals`, with a spend ceiling.
 - [ ] Review tab in the app; accept goes through `mutations`.
 - [ ] Morning brief, templated.
