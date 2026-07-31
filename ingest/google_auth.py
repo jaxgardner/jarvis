@@ -97,13 +97,27 @@ class Credentials:
         }
 
 
+class CredentialsCorrupt(RuntimeError):
+    """The token file exists but can't be read as credentials."""
+
+
 def load() -> Credentials | None:
     path = token_path()
     if not path.is_file():
         return None
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+        refresh_token = data["refresh_token"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        # A bare KeyError/JSONDecodeError here reads like a crash. It is
+        # actually one instruction: authorize again.
+        raise CredentialsCorrupt(
+            f"{path} is not readable as Google credentials ({exc}). "
+            "Delete it and re-run:\n"
+            "    uv run python -m ingest.google_auth --authorize"
+        ) from exc
     return Credentials(
-        refresh_token=data["refresh_token"],
+        refresh_token=refresh_token,
         access_token=data.get("access_token", ""),
         expires_at=data.get("expires_at", ""),
         scopes=data.get("scopes") or [],
@@ -112,14 +126,51 @@ def load() -> Credentials | None:
 
 
 def save(credentials: Credentials) -> None:
+    """Write the token file atomically.
+
+    Temp file plus os.replace(), not a truncating write in place. The old code
+    opened the real path with O_TRUNC and then serialized into it, so a crash —
+    or two ingesters refreshing at the same moment — could leave a truncated
+    file and destroy the refresh token. That credential is only recoverable by
+    sitting at the Mini with a browser open, which is the most expensive
+    recovery in this project.
+
+    The mode is set at creation rather than chmod'd afterwards: the gap between
+    the two is a window where the refresh token is world-readable. os.replace
+    is atomic within a filesystem and preserves the temp file's mode.
+    """
     path = token_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Write with the restrictive mode already in place rather than chmod'ing
-    # afterwards — the gap between the two is a window where the refresh token
-    # is world-readable.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(credentials.to_json(), handle, indent=2)
+    # Same directory, so the replace stays within one filesystem. PID-suffixed
+    # so concurrent writers don't share a temp file.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(credentials.to_json(), handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+# ── scopes ────────────────────────────────────────────────
+
+
+def missing_scopes(granted: list[str] | None) -> list[str]:
+    """Which of SCOPES were not granted.
+
+    Google's consent screen renders each scope as its own checkbox, and a
+    half-awake click can untick one. The resulting credential looks completely
+    healthy — it stores, it refreshes, `--check` passes — and then 403s the
+    first time the ingester it belongs to runs. That is the silent-failure
+    shape this whole module exists to prevent, so it is checked at the one
+    moment it can still be fixed by clicking again.
+    """
+    have = set(granted or [])
+    return [scope for scope in SCOPES if scope not in have]
 
 
 # ── the recurring path ────────────────────────────────────
@@ -191,6 +242,22 @@ def access_token() -> str:
     if credentials.expired:
         credentials = refresh(credentials)
     return credentials.access_token
+
+
+def invalidate() -> None:
+    """Discard the cached access token, keeping the refresh token.
+
+    For the case where Google rejects a token our own clock still considers
+    valid — revocation, a clock skew, a token invalidated server-side. Clearing
+    it means the next access_token() refreshes instead of handing back the same
+    rejected string forever.
+    """
+    credentials = load()
+    if credentials is None:
+        return
+    credentials.access_token = ""
+    credentials.expires_at = ""
+    save(credentials)
 
 
 # ── the one-time path ─────────────────────────────────────
@@ -299,13 +366,26 @@ def authorize() -> Credentials:
             "https://myaccount.google.com/permissions and try again."
         )
 
+    granted = payload.get("scope", "").split()
+    absent = missing_scopes(granted)
+    if absent:
+        # Refuse the credential rather than storing a half-working one. Storing
+        # it would move the failure from here — where the fix is one more click
+        # — to whichever ingester happens to run first.
+        raise RuntimeError(
+            "the consent screen did not grant every scope Jarvis needs.\n"
+            f"  missing: {', '.join(absent)}\n"
+            f"  granted: {', '.join(granted) or '(none)'}\n"
+            "Re-run --authorize and leave every checkbox ticked."
+        )
+
     credentials = Credentials(
         refresh_token=payload["refresh_token"],
         access_token=payload["access_token"],
         expires_at=(
             datetime.now(timezone.utc) + timedelta(seconds=int(payload.get("expires_in", 3600)))
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        scopes=payload.get("scope", "").split(),
+        scopes=granted,
         obtained_at=_now_iso(),
     )
     save(credentials)
@@ -322,7 +402,11 @@ def check() -> int:
     where it surfaces — loudly, on a day you chose, instead of silently on a
     morning you needed the agenda.
     """
-    credentials = load()
+    try:
+        credentials = load()
+    except CredentialsCorrupt as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
     if credentials is None:
         print(f"no credentials at {token_path()}", file=sys.stderr)
         print("run: uv run python -m ingest.google_auth --authorize", file=sys.stderr)
@@ -338,6 +422,12 @@ def check() -> int:
     print(f"authorized  {credentials.obtained_at or 'unknown'}{age}")
     print(f"scopes      {', '.join(credentials.scopes or []) or 'unknown'}")
 
+    absent = missing_scopes(credentials.scopes)
+    if absent:
+        print(f"\nMISSING SCOPES: {', '.join(absent)}", file=sys.stderr)
+        print("Re-run --authorize with every checkbox ticked.", file=sys.stderr)
+        return 1
+
     try:
         # Force a real refresh rather than reusing a cached access token —
         # reusing one would pass for an hour after the refresh token died.
@@ -349,22 +439,49 @@ def check() -> int:
 
     print(f"refresh     ok, new access token expires {credentials.expires_at}")
 
+    # Both APIs, not just Calendar. Checking one and declaring the credential
+    # healthy is how day 8 goes green while Gmail is dead — and enabling one
+    # API in the console while forgetting the other is an easy mistake that
+    # surfaces as a 403 with no useful text.
+    headers = {"Authorization": f"Bearer {credentials.access_token}"}
+
     response = httpx.get(
         "https://www.googleapis.com/calendar/v3/users/me/calendarList",
-        headers={"Authorization": f"Bearer {credentials.access_token}"},
-        params={"maxResults": 10},
+        headers=headers,
+        params={"maxResults": 50},
         timeout=TIMEOUT,
     )
     if response.status_code != 200:
-        print(f"\nCALENDAR CALL FAILED ({response.status_code}): {response.text[:300]}", file=sys.stderr)
+        print(
+            f"\nCALENDAR CALL FAILED ({response.status_code}): {response.text[:300]}",
+            file=sys.stderr,
+        )
         return 1
 
     calendars = response.json().get("items", [])
-    print(f"calendars   {len(calendars)} visible")
-    for calendar in calendars[:10]:
+    selected = [c for c in calendars if c.get("selected") or c.get("primary")]
+    print(f"calendars   {len(calendars)} visible, {len(selected)} would be synced")
+    for calendar in selected[:15]:
         primary = "  (primary)" if calendar.get("primary") else ""
         print(f"              {calendar.get('summary', '?')}{primary}")
-    print("\nOK — the credential is live and can read Calendar.")
+
+    response = httpx.get(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        headers=headers,
+        timeout=TIMEOUT,
+    )
+    if response.status_code != 200:
+        print(
+            f"\nGMAIL CALL FAILED ({response.status_code}): {response.text[:300]}",
+            file=sys.stderr,
+        )
+        return 1
+
+    profile = response.json()
+    print(f"gmail       {profile.get('emailAddress', '?')}, "
+          f"{profile.get('messagesTotal', '?')} messages")
+
+    print("\nOK — the credential is live and can read Calendar and Gmail.")
     return 0
 
 

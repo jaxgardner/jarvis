@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis calendar ingester — LaunchDaemon, 15 minute interval.
+
+  Shaped like com.jarvis.scheduler: StartInterval rather than KeepAlive, so
+  each run is one sync that exits and a hung run can't wedge the schedule.
+
+  15 minutes rather than 60s. Incremental sync makes each run cheap — Google
+  returns only what changed — but calendar staleness is measured in "did I know
+  about the meeting before it started", and nothing needs finer resolution than
+  a quarter hour.
+
+  A LaunchDaemon and not a LaunchAgent, which the original EventKit design
+  could not have been: Calendar access on macOS is TCC-protected and prompts
+  per-user through the GUI, so a root daemon could never obtain it. Google's
+  APIs are ordinary network calls, so this runs like everything else here.
+
+  Note the FileVault constraint in CLAUDE.md still applies: after an unattended
+  reboot the machine sits at the pre-boot unlock screen and no daemon runs at
+  all. The sync_state row is what makes that visible after the fact.
+
+  Install:  sudo ./deploy/install-daemon.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.calendar</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>ingest.calendar</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/calendar.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/calendar.err.log</string>
+</dict>
+</plist>

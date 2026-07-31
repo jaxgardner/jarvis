@@ -198,3 +198,106 @@ def test_the_stored_file_carries_no_client_secret(credential_store):
     it into a second file just doubles the number of places to leak it."""
     google_auth.save(stored())
     assert "client_secret" not in json.loads(google_auth.token_path().read_text())
+
+
+def test_missing_scopes_names_what_was_not_granted():
+    """Google's consent screen renders each scope as its own checkbox, and a
+    half-awake click can untick one. The resulting credential stores, refreshes
+    and passes a naive health check, then 403s the first time the ingester it
+    belongs to runs."""
+    calendar_only = ["https://www.googleapis.com/auth/calendar.readonly"]
+    assert google_auth.missing_scopes(calendar_only) == [
+        "https://www.googleapis.com/auth/gmail.readonly"
+    ]
+
+
+def test_a_full_grant_is_missing_nothing():
+    assert google_auth.missing_scopes(google_auth.SCOPES) == []
+
+
+def test_extra_scopes_are_not_an_error():
+    """Google routinely returns openid/email alongside what was asked for."""
+    assert google_auth.missing_scopes([*google_auth.SCOPES, "openid"]) == []
+
+
+def test_no_scopes_at_all_is_missing_everything():
+    assert google_auth.missing_scopes(None) == google_auth.SCOPES
+
+
+# ── atomic writes ─────────────────────────────────────────
+
+
+def test_a_failed_write_leaves_the_previous_credential_intact(
+    credential_store, monkeypatch
+):
+    """The reason this uses a temp file and os.replace rather than truncating
+    in place. A refresh token is only recoverable by sitting at the Mini with a
+    browser open — the most expensive recovery in this project — so a crash
+    mid-write must not be able to destroy it."""
+    google_auth.save(stored(refresh_token="1//original"))
+
+    def explode(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(google_auth.json, "dump", explode)
+    with pytest.raises(OSError):
+        google_auth.save(stored(refresh_token="1//replacement"))
+
+    assert google_auth.load().refresh_token == "1//original"
+
+
+def test_a_failed_write_leaves_no_temp_file_behind(credential_store, monkeypatch):
+    google_auth.save(stored())
+    monkeypatch.setattr(
+        google_auth.json, "dump", lambda *a, **k: (_ for _ in ()).throw(OSError("nope"))
+    )
+    with pytest.raises(OSError):
+        google_auth.save(stored())
+    assert list(credential_store.glob("*.tmp")) == []
+
+
+def test_rewriting_keeps_the_file_private(credential_store):
+    """os.replace preserves the temp file's mode, not the destination's."""
+    google_auth.save(stored())
+    google_auth.save(stored(access_token="ya29.second"))
+    assert google_auth.token_path().stat().st_mode & 0o077 == 0
+
+
+# ── corrupt storage ───────────────────────────────────────
+
+
+def test_a_truncated_token_file_says_what_to_do(credential_store):
+    """A bare JSONDecodeError reads like a crash. It is actually one
+    instruction: authorize again."""
+    google_auth.token_path().write_text('{"refresh_token": "1//abc"')
+    with pytest.raises(google_auth.CredentialsCorrupt, match="--authorize"):
+        google_auth.load()
+
+
+def test_a_token_file_without_a_refresh_token_is_corrupt(credential_store):
+    google_auth.token_path().write_text('{"access_token": "ya29.x"}')
+    with pytest.raises(google_auth.CredentialsCorrupt):
+        google_auth.load()
+
+
+# ── invalidate ────────────────────────────────────────────
+
+
+def test_invalidate_clears_the_access_token_but_keeps_the_refresh_token(
+    credential_store,
+):
+    """For a token Google rejects that our own clock still thinks is valid.
+    Keeping the refresh token is the whole point — discarding it would turn a
+    401 into a trip to the Mini."""
+    google_auth.save(stored())
+    google_auth.invalidate()
+
+    reloaded = google_auth.load()
+    assert reloaded.access_token == ""
+    assert reloaded.refresh_token == "1//refresh"
+    assert reloaded.expired
+
+
+def test_invalidate_without_credentials_is_a_no_op(credential_store):
+    google_auth.invalidate()  # must not raise
+    assert google_auth.load() is None

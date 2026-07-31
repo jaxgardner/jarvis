@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -98,7 +99,56 @@ def health() -> dict:
     except sqlite3.Error as exc:
         db = {"ok": False, "error": str(exc)}
 
-    return {"status": "ok", "db": db, "configured": config.configured()}
+    return {
+        "status": "ok",
+        "db": db,
+        "configured": config.configured(),
+        "ingest": _ingest_health(),
+    }
+
+
+# An ingester that stops is the failure this phase is built against, and it is
+# a silent one — the agenda just quietly goes stale. Anything past this is
+# treated as broken rather than merely quiet.
+INGEST_STALE_AFTER = timedelta(hours=6)
+
+
+def _ingest_health() -> dict:
+    """Per-source sync state, with staleness already worked out.
+
+    `last_run_at` and `last_ok_at` are both reported because they answer
+    different questions. Equal means healthy. A gap means it is running and
+    failing — a different problem from not running at all, which shows as both
+    being old.
+    """
+    try:
+        conn = connect()
+        try:
+            rows = conn.execute(
+                "SELECT source, last_run_at, last_ok_at, detail FROM sync_state"
+                " ORDER BY source"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        # Before migration 006/005 land, or on a database that can't be read.
+        # /health must stay up: it is what launchd and the phone check.
+        return {"sources": [], "stale": []}
+
+    now = timeutil.now("UTC")
+    sources, stale = [], []
+    for row in rows:
+        item = dict(row)
+        ok_at = item.get("last_ok_at")
+        try:
+            is_stale = ok_at is None or (now - timeutil.parse(ok_at)) > INGEST_STALE_AFTER
+        except ValueError:
+            is_stale = True
+        item["stale"] = is_stale
+        sources.append(item)
+        if is_stale:
+            stale.append(item["source"])
+    return {"sources": sources, "stale": stale}
 
 
 @app.post("/say", dependencies=[Depends(require_token)])
@@ -344,6 +394,65 @@ def ack_reminder(reminder_id: int) -> dict:
     if reply is None:
         raise HTTPException(status_code=404, detail="no such reminder")
     return {"reply": reply, "reminder_id": reminder_id}
+
+
+# ── ingestion review (Phase 6) ────────────────────────────
+# The one place email extraction can reach `events`, and it needs a human at
+# it. An assistant that invents a dentist appointment from a marketing email is
+# worse than one that knows nothing about your mail — not because it is wrong
+# occasionally, but because you stop trusting the agenda, and then the whole
+# thing is decoration.
+
+
+@app.get("/proposals", dependencies=[Depends(require_token)])
+def proposals(limit: int = 50) -> dict:
+    conn = connect()
+    try:
+        return {"proposals": handlers.pending_proposals(conn, max(1, min(limit, 200)))}
+    except sqlite3.OperationalError:
+        return {"proposals": []}
+    finally:
+        conn.close()
+
+
+@app.post("/proposals/{proposal_id}/accept", dependencies=[Depends(require_token)])
+def accept_proposal(proposal_id: int, tz: str | None = None) -> dict:
+    tz_name = tz or config.DEFAULT_TZ
+    with transaction() as conn:
+        reply = handlers.accept_proposal(conn, proposal_id, tz_name)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    return {"reply": reply, "proposal_id": proposal_id}
+
+
+@app.post("/proposals/{proposal_id}/reject", dependencies=[Depends(require_token)])
+def reject_proposal(proposal_id: int) -> dict:
+    with transaction() as conn:
+        reply = handlers.reject_proposal(conn, proposal_id)
+    if reply is None:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    return {"reply": reply, "proposal_id": proposal_id}
+
+
+@app.get("/inbox", dependencies=[Depends(require_token)])
+def inbox(limit: int = 25, unread_only: bool = False, q: str | None = None) -> dict:
+    """Recent ingested mail — metadata and Google's snippet, never bodies."""
+    limit = max(1, min(limit, 200))
+    conn = connect()
+    try:
+        if q:
+            return {"messages": handlers.search_email(conn, q, limit)}
+        clause = " WHERE is_unread = 1" if unread_only else ""
+        rows = conn.execute(
+            "SELECT sender, subject, snippet, received_at, is_unread, thread_id"
+            f" FROM email_messages{clause} ORDER BY received_at DESC LIMIT ?",  # noqa: S608
+            (limit,),
+        ).fetchall()
+        return {"messages": [dict(r) for r in rows]}
+    except sqlite3.OperationalError:
+        return {"messages": []}
+    finally:
+        conn.close()
 
 
 # ── dashboard reads (Phase 7d) ────────────────────────────

@@ -20,7 +20,13 @@
 
 set -uo pipefail   # deliberately NOT -e; see note 2 above
 
-LABELS=(com.jarvis.api com.jarvis.scheduler com.jarvis.worker)
+LABELS=(
+    com.jarvis.api
+    com.jarvis.scheduler
+    com.jarvis.worker
+    com.jarvis.calendar
+    com.jarvis.gmail
+)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="/Users/jaxongardner/Library/Logs/jarvis"
 

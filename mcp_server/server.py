@@ -17,7 +17,7 @@ import os
 # mcp 2.x: FastMCP was replaced by MCPServer. Same decorator API.
 from mcp.server import MCPServer
 
-from app import mutations, timeutil
+from app import handlers, mutations, timeutil
 from app.config import DEFAULT_TZ
 from app.db import connect, transaction
 from mcp_server.search import search_notes as _search_notes
@@ -42,6 +42,23 @@ def search_notes(query: str, limit: int = 10) -> str:
         conn.close()
     if not results:
         return f"No notes matching {query!r}."
+    return json.dumps(results, indent=2)
+
+
+@mcp.tool()
+def search_email(query: str, limit: int = 10) -> str:
+    """Search ingested email by keyword — sender, subject, and Google's snippet.
+
+    Metadata only. Message bodies are never stored, so this can tell you that
+    an email arrived and roughly what it said, but not its full contents.
+    """
+    conn = connect()
+    try:
+        results = handlers.search_email(conn, query, max(1, min(limit, 50)))
+    finally:
+        conn.close()
+    if not results:
+        return f"No email matching {query!r}."
     return json.dumps(results, indent=2)
 
 

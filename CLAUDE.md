@@ -26,6 +26,7 @@ wrong, say so — don't silently do it differently.
     mcp/         jarvis-mcp stdio server            (Phase 3)
     worker/      claude -p job runner               (Phase 3)
     scheduler/   reminder firer, no LLM             (Phase 2)
+    ingest/      Google Calendar + Gmail importers  (Phase 6)
     migrations/  numbered .sql, applied by migrate.py
     tests/
 
@@ -38,18 +39,52 @@ committed and survives a re-clone.
 See `migrations/001_init.sql` — it is the authoritative copy, applied in full
 during Phase 0. Domain tables: `events`, `reminders`, `people`, `projects`,
 `notes`. Operational: `utterances`, `mutations`, `jobs`. Search: `notes_fts`
-(external-content FTS5 + three sync triggers).
+(external-content FTS5 + three sync triggers). Ingestion (Phase 6):
+`sync_state`, `proposals`, `email_messages` + `email_fts`.
 
 Timestamps are **ISO 8601 with offset**. Never naive local time, never a bare
 date for something that has a time. This is the single most common source of
 bugs in this kind of system.
 
-Two schema subtleties worth not rediscovering:
+Schema subtleties worth not rediscovering:
 - `idx_events_ext` is a *partial* unique index — it dedupes synced events while
   still allowing many NULL `external_id` rows.
 - Notes are soft-deleted, which fires the FTS *update* trigger, not the delete
   trigger. Soft-deleted rows stay in the index; search must join `notes` and
-  filter `deleted_at IS NULL`.
+  filter `deleted_at IS NULL`. Email rows are *hard*-deleted when they age out,
+  so `email_fts` needs no such join.
+- `idx_proposals_ext` excludes rejected rows, so it does **not** stop a message
+  being re-proposed after you said no. `ingest.gmail.candidates()` enforces
+  that, by skipping any message with a proposals row of any status.
+- `proposals.event_id` is `ON DELETE SET NULL` (migration 007). It has to be:
+  accepting a proposal is undoable, and `/undo` reverses an insert with a hard
+  delete, which a RESTRICT reference refuses.
+
+## Ingestion (Phase 6)
+
+Read-only, one direction. Voice events stay `source='voice'` and are never
+pushed to Google. Two sources, two very different postures:
+
+- **Calendar → `events`, directly.** Structured in, structured out, nothing to
+  extract and nothing to review.
+- **Gmail → two places.** Metadata and Google's snippet into `email_messages`,
+  which `query` reads so the assistant can answer "did the landlord write
+  back?". Separately, a narrow query feeds a capped Haiku extractor whose
+  output lands in `proposals` — a review queue. **No path from email to
+  `events` without a human accepting it.**
+
+Message bodies are never stored. `format=metadata` means Gmail does not return
+them, so there is no path to storing them by accident.
+
+**Synced writes bypass the mutations helper.** This is an exception to the
+invariant below, and a deliberate one: the log exists to make *voice* input
+reversible, a sync is not a user action, and a few hundred synced rows would
+bury the user's last real action and make `/undo` useless for exactly what it
+was built for. Anything a human *accepts* goes through the helper as normal.
+
+Cursors expire on Google's schedule — Calendar answers **410**, Gmail **404**.
+Both are routine: drop the cursor, refetch in full. An ingester that treats
+either as fatal stops permanently after a quiet week.
 
 ## API contracts
 
@@ -82,6 +117,14 @@ engine — no markdown, no lists, no emoji.
 | `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
 | `GET /activity` | Utterances + what each one changed; drives swipe-to-undo |
 | `GET /jobs` | Deep-path history (results truncated; full text on `/jobs/{id}`) |
+| `GET /proposals` | Pending email extractions awaiting review |
+| `POST /proposals/{id}/accept`, `/reject` | Dispose of one. Accept writes through `mutations` |
+| `GET /inbox` | Recent ingested mail; `?q=` searches, `?unread_only=` filters |
+
+`/health` gains an `ingest` block: per-source `last_run_at` / `last_ok_at` and
+a `stale` list. The two timestamps are separate on purpose — equal means
+healthy, a gap means running-and-failing, both old means not running at all,
+and those need different fixes.
 
 `/metrics` takes `?days=N` and includes a `spend` block — token counts are
 stored on `utterances` and costed at read time, so a price change re-costs

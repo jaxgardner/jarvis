@@ -16,7 +16,7 @@ Read `CLAUDE.md` first — it holds the settled decisions. This file holds the
 | 0–3 — foundations, fast path, scheduler, deep path | Shipped, in daily use |
 | 4 — local speech / desktop | **Superseded.** iOS gave STT (7a); TTS became Phase 8 |
 | 5 — dashboard | **Absorbed into 7d.** Do not build the HTMX version |
-| 6 — ingestion | Planned + auth spike built. **Blocked on a human** (§2.1) |
+| 6 — ingestion | Server side **built and tested offline.** Never run against Google — still blocked on a human (§2.1) |
 | 7 — iOS app | a/b/c/d complete. Tested on hardware; icon landed after that test |
 | 8 — voice | Specced only. Not started |
 
@@ -25,7 +25,7 @@ five commits ahead of `master`. Working tree clean.
 
 ### Verified
 
-- 136 offline Python tests; 13 iOS contract tests; iOS Debug + Release build clean.
+- 231 offline Python tests; 13 iOS contract tests; iOS Debug + Release build clean.
 - APNs end to end on real hardware: a fired reminder pushed, Snooze tapped
   from the lock screen, row requeued 10 minutes out, mutation logged, device
   authenticated with its own per-device token without the app opening.
@@ -40,6 +40,11 @@ five commits ahead of `master`. Working tree clean.
 - **The app icon** landed after the last hardware test. Needs a rebuild.
 - **Kokoro** has never been run on this machine. Phase 8's first task is a
   benchmark, not an implementation.
+- **No part of Phase 6 has touched Google.** Both ingesters, the OAuth
+  hardening, the review queue and the new endpoints are covered by offline
+  tests against captured response shapes — which pins the logic, not the
+  assumption that Google's responses look the way I think they do. §2.1 is the
+  gate, and it is unchanged: nothing here is proven until `--check` exits 0.
 
 ---
 
@@ -47,15 +52,22 @@ five commits ahead of `master`. Working tree clean.
 
 ### 2.1 Google auth — this gates all of Phase 6
 
-Ten minutes in [console.cloud.google.com](https://console.cloud.google.com),
-then two commands. Full steps in `docs/phase-6-ingestion.md` §2.
+**Everything else in Phase 6 is now written. This is the only thing standing
+between you and a working calendar.** Ten minutes in
+[console.cloud.google.com](https://console.cloud.google.com), then two
+commands. Full steps in `docs/phase-6-ingestion.md` §2.
 
 1. New project → **APIs & Services → Library** → enable **Google Calendar
-   API** and **Gmail API**.
-2. **OAuth consent screen** → External → add yourself as a test user →
-   **Publishing status → Publish app → In production**.
-3. **Credentials → OAuth client ID → Desktop app** → put the ID and secret in
-   `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+   API** and **Gmail API**. Both — `--check` probes each, because enabling one
+   and forgetting the other fails as an opaque 403.
+2. **Google Auth Platform → Audience** → External → **Publishing status →
+   Publish app → In production**.
+3. **Google Auth Platform → Clients → Create client → Desktop app** → put the
+   ID and secret in `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+
+> The console was reorganized: what older notes call "APIs & Services → OAuth
+> consent screen" is now **Google Auth Platform**, and publishing status lives
+> under *Audience*.
 
 > **Step 2 is the whole point.** Left in *Testing*, Google issues refresh
 > tokens that expire after **seven days**, silently, with no error until
@@ -63,16 +75,25 @@ then two commands. Full steps in `docs/phase-6-ingestion.md` §2.
 > then stops. Production status keeps the app unverified — you click through a
 > warning — but the token persists.
 
-Then, on the Mini (opens a browser):
+Then, on the Mini (opens a browser). **Leave every scope checkbox ticked** —
+`--authorize` now refuses a partial grant rather than storing a credential that
+looks healthy and 403s a week later:
 
     uv run python -m ingest.google_auth --authorize
+    uv run migrate.py                      # 006 and 007 are new
+
+Then a first sync, by hand, before letting launchd near it:
+
+    uv run python -m ingest.calendar          # then --status
+    uv run python -m ingest.gmail --context   # free: no model calls
+    uv run python -m ingest.gmail             # adds the capped extractor
+    sudo ./deploy/install-daemon.sh           # installs the two new daemons
 
 **Then ask Jarvis to remind you in eight days to run:**
 
     uv run python -m ingest.google_auth --check
 
-Exit 0 = the credential survived, Phase 6 proceeds. Exit 1 = the publishing
-status didn't take; fix it before any importer is written.
+Exit 0 = the credential survived. Exit 1 = the publishing status didn't take.
 
 ### 2.2 Rebuild the app for the icon
 
@@ -104,37 +125,38 @@ review first. Nothing depends on the answer.
 **In order**, because each depends on the last — not because anything
 needs to soak. Build as fast as it goes.
 
-### 3.1 Calendar ingester
+### 3.1 ~~Calendar ingester~~ — built
 
-Spec: `docs/phase-6-ingestion.md` §3. Schema is already in place (`005`).
+`ingest/calendar.py`, `ingest/client.py`, `ingest/state.py`. Full fetch then
+`syncToken`, `singleEvents=true`, `showDeleted=true`, 410 recovery, all-day
+anchoring, per-calendar cursors, error isolation so one revoked shared calendar
+doesn't stop your own. Every selected calendar syncs, plus primary
+unconditionally. 26 offline tests.
 
-- `ingest/calendar.py`: full fetch, then `syncToken` incremental sync.
-- **`syncToken` is not an optimization.** Incremental sync is the only way
-  deletions arrive (`status: "cancelled"`). A cancelled meeting that lingers is
-  worse than one never imported, because you plan around it.
-- `singleEvents=true` so recurring events arrive expanded, one row per
-  occurrence. Storing rules would mean reimplementing RRULE in `/agenda`.
-- `source='calendar'`, `external_id` = Google event id. `idx_events_ext` (a
-  *partial* unique index, in the schema since `001`) does the dedupe. Nothing
-  to migrate.
-- Read-only, one direction. Voice events stay `source='voice'` and are not
-  pushed to Google. Two-way sync is a much larger problem and none of it is
-  needed to make `/agenda` useful.
-- launchd plist shaped like `com.jarvis.scheduler`; write `sync_state` every
-  run so silence is detectable.
+One decision worth knowing about: `external_id` is `{calendarId}:{eventId}`,
+not the bare event id. Google reuses an event's id across every calendar it
+appears on, so the bare id would collide on `idx_events_ext` and the row would
+flap between two calendars' copies on every sync. The cost is that a meeting on
+two synced calendars shows twice. Visible and mildly annoying beats invisible
+and wrong.
 
-### 3.2 Gmail → proposals
+### 3.2 ~~Gmail~~ — built, with an addition to the spec
 
-Spec: §4. Narrow query (flights, appointments, deliveries, reservations) — the
-query filters, not the model. Track `historyId` in `sync_state`.
+`ingest/gmail.py`, two passes. The proposals queue is as §4 specified. The
+addition is a **context pass**: metadata and Google's snippet into
+`email_messages`, feeding `handlers.search_email` → `query` and an MCP tool.
 
-**Extraction writes to `proposals`, never to `events`.** Acceptance goes
-through the mutations helper so it's logged and undoable. The risk isn't
-being occasionally wrong; it's that one invented appointment teaches you to
-distrust the agenda, and an agenda you don't trust is decoration.
+That is a deliberate deviation, written up in §4 of the phase doc. §4 as
+written would have left the assistant unable to answer "did the landlord email
+me back?" — proposals only decide what becomes a calendar entry. Bodies are
+never stored (`format=metadata` makes that structural, not a promise), and
+nothing from the context pass can reach `events`.
 
-Add a Review tab to the app. Cap Haiku spend per run — `/say` has a human
-waiting, an inbox sweep doesn't, and the token columns already measure it.
+Still to do: **the Review tab in the app.** `GET /proposals` and
+`POST /proposals/{id}/accept|reject` are built and tested; the Swift is not
+written. Accept goes through `mutations`, so it is undoable — which took
+migration `007`, because `proposals.event_id` defaulted to RESTRICT and `/undo`
+hard-deletes.
 
 ### 3.3 Morning brief
 
@@ -168,6 +190,14 @@ Each of these cost real time to find. They are all load-bearing.
 | | |
 | :-- | :-- |
 | **OAuth Testing status** | Refresh tokens die at 7 days, silently. `--check` on day 8 is the gate |
+| **A silently unticked scope** | Google's consent screen is per-scope checkboxes. A partial grant stores, refreshes and looks healthy, then 403s only when that ingester runs. `--authorize` refuses it now |
+| **Google event ids are shared across calendars** | The same meeting on primary and a shared calendar carries the same id. Keyed on the bare id, the two rows collide on `idx_events_ext` and flap forever. Hence `{calendarId}:{eventId}` |
+| **Sync cursors expire on Google's schedule** | Calendar 410, Gmail 404. Both routine — drop the cursor, refetch. Treated as fatal, the ingester stops permanently after a quiet week |
+| **`timeMin` + `syncToken` is rejected** | Google refuses the combination outright. The window is baked into the cursor by the first sync |
+| **`nextSyncToken` is only on the last page** | Saving it early skips every event on the unread pages — permanently, because the next run starts after them |
+| **All-day events have no offset at all** | A bare `YYYY-MM-DD`. Stored verbatim it breaks the timestamp rule and sorts wrongly against everything else |
+| **`proposals.event_id` was RESTRICT** | Accepting a proposal is undoable by design, and `/undo` reverses an insert with a *hard* delete — which the default foreign key refuses. Migration `007` makes it `ON DELETE SET NULL` |
+| **`idx_proposals_ext` does not stop re-proposing** | It excludes rejected rows, so a rejected message can be proposed again. `ingest.gmail.candidates()` is what enforces the rule, not the index |
 | **`notify.push()` returns bool, never raises** | `scheduler/run.py` calls it in a loop over due reminders; an exception takes out every *other* reminder in the same tick |
 | **APNs environment must match the entitlement** | `APS_ENVIRONMENT` is per-configuration; the app reports `sandbox` on `#if DEBUG`. Hardcoding `production` is the classic works-on-TestFlight-fails-from-Xcode bug |
 | **Snooze drops the recurrence rule** | The scheduler inserts the next occurrence at fire time. A snoozed row keeping its rule would insert a *second* one and a daily reminder becomes two |
@@ -183,8 +213,13 @@ Each of these cost real time to find. They are all load-bearing.
 
 ## 5. How to verify anything
 
-    # Python — offline, always safe, ~1.5s
+    # Python — offline, always safe, ~30s
     uv run pytest tests/ -q --ignore=tests/test_utterances.py
+
+    # Ingestion state, without touching Google
+    uv run python -m ingest.calendar --status
+    uv run python -m ingest.gmail --status
+    curl -s localhost:8000/health -H "Authorization: Bearer $JARVIS_TOKEN" | jq .ingest
 
     # Python — live Haiku, costs a few cents, re-run after router changes
     uv run pytest tests/test_utterances.py -v

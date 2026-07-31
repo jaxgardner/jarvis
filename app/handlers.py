@@ -330,6 +330,14 @@ def _answer_recall(conn, args: dict, tz_name: str) -> str | None:
     notes = _search_notes(conn, subject, limit=3)
     if not notes:
         return None  # let the model try; it may reword the question usefully
+
+    # Notes matched — but so might mail, and then the templated note answer
+    # would be a confident wrong one. "Did Sarah email me?" asked by someone
+    # who also has a note mentioning Sarah must not come back as "You noted:
+    # …". Hand both to the model instead of picking the wrong source.
+    if search_email(conn, subject, limit=1):
+        return None
+
     if len(notes) == 1:
         return f"You noted: {notes[0]['body']}"
     bodies = "; ".join(n["body"] for n in notes[:3])
@@ -380,6 +388,17 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     for n in notes:
         lines.append(f"NOTE: {n['body']}")
 
+    # Mail, same treatment. Metadata and Google's snippet only — enough to
+    # answer "did the landlord write back" by quoting what actually arrived,
+    # and not enough to invent anything, because there is no body to embroider.
+    for m in search_email(conn, args["question"], limit=6):
+        when = timeutil.speak_datetime(m["received_at"], tz_name)
+        unread = " [unread]" if m["is_unread"] else ""
+        lines.append(
+            f"EMAIL{unread}: from {m['sender'] or 'unknown'} {when} — "
+            f"{m['subject'] or '(no subject)'}: {m['snippet'] or ''}"
+        )
+
     if not lines:
         lines.append("(nothing stored in this window)")
 
@@ -412,6 +431,150 @@ def _search_notes(conn, question: str, limit: int = 10) -> list[dict]:
             f"""SELECT body FROM notes WHERE deleted_at IS NULL AND ({clause})
                   ORDER BY id DESC LIMIT ?""",  # noqa: S608
             (*[f"%{t}%" for t in terms], limit),
+        ).fetchall()
+    ]
+
+
+_EMAIL_COLUMNS = "sender, subject, snippet, received_at, is_unread"
+
+
+def search_email(conn, question: str, limit: int = 6) -> list[dict]:
+    """Search ingested mail. Same two-stage shape as _search_notes.
+
+    Unlike notes, email rows are hard-deleted when they age out, so the FTS
+    index needs no deleted_at join to stay honest — the join back to
+    email_messages is only there for the columns FTS doesn't store.
+
+    Returns [] when the table doesn't exist yet, so every caller keeps working
+    on a database that hasn't had migration 006 applied.
+    """
+    terms = [
+        w for w in "".join(c if c.isalnum() else " " for c in question).split()
+        if len(w) > 2
+    ]
+    if not terms:
+        return []
+    try:
+        rows = conn.execute(
+            f"""SELECT {_EMAIL_COLUMNS} FROM email_fts f
+                  JOIN email_messages e ON e.id = f.rowid
+                  WHERE email_fts MATCH ?
+                  ORDER BY rank LIMIT ?""",  # noqa: S608 — a fixed column list
+            (" OR ".join(terms), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    if rows:
+        return [dict(r) for r in rows]
+
+    clause = " OR ".join(
+        "(subject LIKE ? OR snippet LIKE ? OR sender LIKE ?)" for _ in terms
+    )
+    values: list[str] = []
+    for term in terms:
+        values.extend([f"%{term}%"] * 3)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                f"""SELECT {_EMAIL_COLUMNS} FROM email_messages WHERE {clause}
+                      ORDER BY received_at DESC LIMIT ?""",  # noqa: S608
+                (*values, limit),
+            ).fetchall()
+        ]
+    except sqlite3.OperationalError:
+        return []
+
+
+# ── proposals (Phase 6) ───────────────────────────────────
+
+
+def accept_proposal(conn, proposal_id: int, tz_name: str) -> str | None:
+    """Turn a reviewed proposal into a real event.
+
+    This one write DOES go through the mutations helper, unlike everything else
+    ingestion does. The distinction is not about where the data came from — it
+    is that a human pressed Accept, which makes this a user action, and user
+    actions are the thing /undo exists to reverse.
+    """
+    row = conn.execute(
+        "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] != "pending":
+        return f"That one was already {row['status']}."
+
+    payload = json.loads(row["payload_json"])
+    # The extractor drops these before they ever become proposals, so reaching
+    # here means a hand-written row or a schema change. Answer rather than 500:
+    # this endpoint is driven by a button on a phone.
+    raw_start = payload.get("starts_at")
+    try:
+        starts_at = timeutil.to_utc_iso(raw_start) if raw_start else None
+    except ValueError:
+        starts_at = None
+    if starts_at is None:
+        return "That one has no usable time — I can't put it on the calendar."
+
+    values = {
+        "title": (payload.get("title") or "Untitled").strip(),
+        "starts_at": starts_at,
+        "all_day": int(bool(payload.get("all_day"))),
+        # 'email', not 'calendar': this did not come from Google Calendar, and
+        # labelling it so would make the calendar ingester's dedupe treat it as
+        # a row it owns and is entitled to overwrite.
+        "source": "email",
+    }
+    if payload.get("ends_at"):
+        values["ends_at"] = timeutil.to_utc_iso(payload["ends_at"])
+    if payload.get("location"):
+        values["location"] = payload["location"].strip()
+
+    event_id = mutations.insert(conn, None, "events", values)
+    conn.execute(
+        """UPDATE proposals
+             SET status = 'accepted',
+                 decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                 event_id = ?
+             WHERE id = ?""",
+        (event_id, proposal_id),
+    )
+    when = timeutil.speak_datetime(
+        values["starts_at"], tz_name, bool(values["all_day"])
+    )
+    return f"Added {values['title']}, {when}."
+
+
+def reject_proposal(conn, proposal_id: int) -> str | None:
+    """Decline a proposal. Nothing is written to `events`, and the ingester
+    will not offer this message again — `candidates()` skips any message with a
+    proposals row of any status."""
+    row = conn.execute(
+        "SELECT status FROM proposals WHERE id = ?", (proposal_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] != "pending":
+        return f"That one was already {row['status']}."
+    conn.execute(
+        """UPDATE proposals
+             SET status = 'rejected',
+                 decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+             WHERE id = ?""",
+        (proposal_id,),
+    )
+    return "Dismissed."
+
+
+def pending_proposals(conn, limit: int = 50) -> list[dict]:
+    return [
+        dict(r)
+        for r in conn.execute(
+            """SELECT id, source, kind, summary, confidence, payload_json, created_at
+                 FROM proposals WHERE status = 'pending'
+                 ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
         ).fetchall()
     ]
 
