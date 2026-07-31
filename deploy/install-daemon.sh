@@ -6,7 +6,7 @@
 # Re-running is safe — each job is unloaded before the new plist is loaded.
 set -euo pipefail
 
-LABELS=(com.jarvis.api com.jarvis.scheduler)
+LABELS=(com.jarvis.api com.jarvis.scheduler com.jarvis.worker)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="/Users/jaxongardner/Library/Logs/jarvis"
 

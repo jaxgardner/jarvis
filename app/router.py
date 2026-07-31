@@ -171,7 +171,16 @@ TOOLS: list[dict] = [
                 "restated_task": {
                     "type": "string",
                     "description": "The task restated clearly and self-containedly.",
-                }
+                },
+                "is_follow_up": {
+                    "type": "boolean",
+                    "description": (
+                        "True when this refers back to a deep task already done "
+                        "— 'what did you find about X', 'go deeper on that', "
+                        "'what about the second one'. Lets the agent resume the "
+                        "earlier conversation instead of starting cold."
+                    ),
+                },
             },
             "required": ["restated_task"],
         },

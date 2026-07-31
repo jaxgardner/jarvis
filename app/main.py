@@ -76,13 +76,30 @@ def say(req: SayRequest) -> dict:
 
     if tool == "escalate":
         with transaction() as conn:
+            # A follow-up inherits the previous job's Claude Code session, so
+            # "what did you find about the second one" resumes that
+            # conversation instead of starting cold with no idea what "the
+            # second one" was.
+            session_id = None
+            if args.get("is_follow_up"):
+                prior = conn.execute(
+                    """SELECT session_id FROM jobs
+                         WHERE status = 'done' AND session_id IS NOT NULL
+                         ORDER BY id DESC LIMIT 1"""
+                ).fetchone()
+                session_id = prior["session_id"] if prior else None
+
             job_id = int(
                 conn.execute(
-                    "INSERT INTO jobs (utterance_id, prompt) VALUES (?,?)",
-                    (utterance_id, args.get("restated_task", req.text)),
+                    "INSERT INTO jobs (utterance_id, prompt, session_id) VALUES (?,?,?)",
+                    (utterance_id, args.get("restated_task", req.text), session_id),
                 ).lastrowid
             )
-        reply = "On it. I'll ping you when it's done."
+        reply = (
+            "Picking up where we left off. I'll ping you."
+            if session_id
+            else "On it. I'll ping you when it's done."
+        )
         latency = _finish(utterance_id, "deep", tool, reply, started)
         return {
             "reply": reply,

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "command": "/Users/jaxongardner/development/jarvis/.venv/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/Users/jaxongardner/development/jarvis"
+    }
+  }
+}

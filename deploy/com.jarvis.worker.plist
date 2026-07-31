@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis deep-path worker — LaunchDaemon, 30s interval.
+
+  Drains the jobs queue. Separate from the scheduler because their failure
+  modes are unrelated: a wedged Claude Code subprocess must never delay a
+  reminder.
+
+  StartInterval, not KeepAlive: each run drains what's queued and exits.
+  Jobs are claimed with UPDATE...RETURNING, so an overlapping run is safe.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>worker.run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- claude lives in ~/.local/bin, which is not on a daemon's default PATH. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/jaxongardner/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/worker.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/worker.err.log</string>
+</dict>
+</plist>
