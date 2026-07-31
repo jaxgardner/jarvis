@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis Gmail ingester — LaunchDaemon, 30 minute interval.
+
+  Half as often as the calendar, because this one costs money. The context pass
+  is free (metadata only, no model), but the proposal pass makes up to
+  MAX_EXTRACTIONS_PER_RUN Haiku calls, bounded further by a per-run dollar
+  ceiling in ingest/gmail.py. Thirty minutes times that ceiling is the true
+  worst-case daily spend, and it is worth being able to compute.
+
+  Nothing here has a human waiting on it, which is exactly why it can be
+  batched and capped — unlike /say, where the two-second budget rules.
+
+  Install:  sudo ./deploy/install-daemon.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.gmail</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>ingest.gmail</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/gmail.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/gmail.err.log</string>
+</dict>
+</plist>

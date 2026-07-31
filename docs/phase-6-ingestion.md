@@ -77,21 +77,34 @@ Built: `ingest/google_auth.py`. Three things to do in
 [console.cloud.google.com](https://console.cloud.google.com), then two
 commands.
 
+> **The console moved.** What used to be "APIs & Services → OAuth consent
+> screen" is now **Google Auth Platform**, split into *Branding*, *Audience*
+> and *Clients*. Publishing status lives under **Audience**. The steps below
+> use the current names; older write-ups of this same procedure will not match
+> what you see.
+
 1. **New project** (any name). Then **APIs & Services → Library** and enable
    **Google Calendar API** and **Gmail API**. Ingestion fails with a
-   confusing 403 if the API is off, rather than saying so.
+   confusing 403 if the API is off, rather than saying so. Both are needed —
+   `--check` probes each one precisely because enabling one and forgetting the
+   other is easy and its symptom is opaque.
 
-2. **APIs & Services → OAuth consent screen.** User type *External* (a
-   personal `@gmail.com` account has no Workspace to be Internal to). Add
-   yourself as a test user. Then — the step this whole section is about —
-   **Publishing status → Publish app → In production.** It stays unverified
-   and shows a warning screen you click through; that is expected and fine
-   for a single-user app.
+2. **Google Auth Platform → Audience.** User type *External* (a personal
+   `@gmail.com` account has no Workspace to be Internal to). Then — the step
+   this whole section is about — **Publishing status → Publish app → In
+   production.** It stays unverified and shows a warning screen you click
+   through; that is expected and fine for a single-user app.
 
-3. **APIs & Services → Credentials → Create credentials → OAuth client ID →
-   Desktop app.** Copy the client ID and secret into `.env` as
-   `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Desktop clients may redirect
-   to any loopback port, so `http://127.0.0.1:8765/` needs no registering.
+3. **Google Auth Platform → Clients → Create client → Desktop app.** Copy the
+   client ID and secret into `.env` as `GOOGLE_CLIENT_ID` /
+   `GOOGLE_CLIENT_SECRET`. Desktop clients may redirect to any loopback port,
+   so `http://127.0.0.1:8765/` needs no registering.
+
+**Leave every checkbox ticked on the consent screen.** Google renders each
+scope separately and a half-awake click can untick one. `--authorize` now
+refuses a partial grant rather than storing it, because the resulting
+credential stores, refreshes and looks healthy, then 403s the first time the
+ingester it belongs to runs.
 
 Then, on the Mini (it opens a browser):
 
@@ -105,10 +118,11 @@ at mode 600 — beside the database and the APNs `.p8`, never in the repo.
     uv run python -m ingest.google_auth --check
 
 It forces a real refresh rather than reusing a cached access token — a cached
-one would pass for an hour after the credential died — and then reads your
-calendar list. Exit 0 means the credential survived and the phase can proceed.
-Exit 1 on day 8 means the publishing status didn't take, and no importer
-should be written until it does.
+one would pass for an hour after the credential died — then reads your calendar
+list **and** your Gmail profile. Both, because checking one and declaring the
+credential healthy is how day 8 goes green while Gmail is dead. Exit 0 means
+the credential survived. Exit 1 on day 8 means the publishing status didn't
+take.
 
 ### One thing the Google path buys for free
 
@@ -198,14 +212,52 @@ calendar entries — and none of it is needed to make `/agenda` useful.
 
 ## 4. Gmail
 
+### Two passes, not one
+
+**This section originally specified one output — `proposals` — and that was
+half the story.** Proposals answer "should this become a calendar entry?". They
+do not answer "did the landlord ever email me back?", which is the question
+that actually makes an assistant feel like it knows your life. So Gmail is read
+twice, with deliberately different risk profiles:
+
+| Pass | Output | Model | Cost | Can reach `events`? |
+| :-- | :-- | :-- | :-- | :-- |
+| **Context** | `email_messages` | none | free | **No** |
+| **Proposals** | `proposals` | Haiku, capped | ~$0.10/run ceiling | Only via a human |
+
+The context pass stores metadata and Google's own `snippet` — never bodies.
+`format=metadata` is what makes that structural rather than a promise: Gmail
+does not return the body at all, so there is no path to storing one by
+accident. A snippet is ~200 characters Google already computed, so there is no
+extraction step and nothing invented. The assistant can quote what arrived; it
+cannot embroider it.
+
+That is the whole safety argument, and it is worth being explicit about why it
+differs from the proposals rule below. The danger of email is not that the
+assistant *knows* about it — it is that a model turns a marketing email into a
+dentist appointment and puts it on the calendar. Reading is safe. Writing is
+what needs a human.
+
+`handlers.search_email` feeds `query`, and the MCP server exposes it so the
+deep path sees mail too. One wrinkle worth keeping: when a question matches
+both a note and an email, the templated note answer is *suppressed* and both go
+to the model. "Did Sarah email me?" asked by someone who also has a note
+mentioning Sarah must not come back as "You noted: …".
+
 ### Narrow by query, not by model
 
-The extraction step is expensive and noisy, so the query does the filtering
-first: flights, appointments, deliveries, reservations. A broad query that
-leans on the model to reject irrelevant mail costs a Haiku call per message
-and is worse at it.
+For the proposals pass, the extraction step is expensive and noisy, so the
+query does the filtering first: flights, appointments, deliveries,
+reservations. A broad query that leans on the model to reject irrelevant mail
+costs a Haiku call per message and is worse at it.
 
-Track `historyId` in `sync_state` for incremental fetch.
+Track `historyId` in `sync_state` for incremental fetch. Gmail expires history
+IDs on its own schedule and answers **404** when it has — routine, and handled
+exactly like Calendar's 410: drop the cursor, refetch.
+
+`email_messages.examined_at` is what stops the extractor paying twice. Without
+it, every run re-pays a Haiku call for the same marketing email that matched
+the query and yielded nothing, forever.
 
 ### Proposals, never direct writes
 
@@ -234,8 +286,21 @@ forever, which is the correct default.
 
 One Haiku call per candidate message, and unlike `/say` there is no human
 waiting, so batch and cap it. Today's whole-day spend was under two cents; an
-uncapped inbox sweep could dwarf that. `model_calls` and the token columns
-already record it — put a hard per-run ceiling in config and log against it.
+uncapped inbox sweep could dwarf that.
+
+**Two ceilings, both wanted** (`ingest/gmail.py`):
+
+    MAX_EXTRACTIONS_PER_RUN = 25       # bounds the work
+    MAX_SPEND_USD_PER_RUN   = 0.10     # bounds the damage
+
+The count assumes messages are small. A forwarded thread with fifty quoted
+replies breaks that assumption and the count would not notice, so the dollar
+figure is checked against the live `usage` tally between messages and stops the
+run early. Whatever is left is picked up next run — the daemon fires every 30
+minutes, so nothing is lost, only delayed.
+
+Worst-case daily spend is therefore `48 × $0.10`, and being able to compute
+that number is the point of having the second ceiling at all.
 
 ---
 
@@ -260,15 +325,30 @@ Delivered by APNs, so it can carry actions the way fired reminders already do.
 ## 6. Work
 
 - [x] **Auth spike.** `ingest/google_auth.py` — loopback + PKCE, refresh, and
-      a `--check` that forces a real refresh. Console steps in §2.
-- [ ] **Run it, then run `--check` on day 8.** This is the gate. Everything
-      below is wasted if the credential doesn't survive a week.
+      a `--check` that forces a real refresh against *both* APIs. Hardened
+      since the spike: atomic token writes, partial-grant detection, a clear
+      error on a corrupt token file. Console steps in §2.
+- [ ] **Run `--authorize`, then `--check` on day 8.** This is the gate, and it
+      is the one thing here that needs a human. Everything below is written and
+      tested offline, but **none of it has run against Google.**
 - [x] `migrations/005_ingest.sql` — `sync_state`, `proposals`.
-- [ ] `ingest/calendar.py` — full fetch, then `syncToken`; handle `cancelled`.
-- [ ] launchd plist, same shape as the scheduler; heartbeat so silence is
-      detectable.
-- [ ] `ingest/gmail.py` + extraction into `proposals`, with a spend ceiling.
-- [ ] Review tab in the app; accept goes through `mutations`.
+- [x] `migrations/006_email.sql` — `email_messages`, `email_fts`.
+- [x] `migrations/007_proposal_event_fk.sql` — `event_id ON DELETE SET NULL`,
+      without which accepting a proposal was not actually undoable.
+- [x] `ingest/client.py` — one HTTP path, retries, typed `ApiError` so 410/404
+      are routine rather than fatal.
+- [x] `ingest/state.py` — `sync_state` reads and writes.
+- [x] `ingest/calendar.py` — full fetch, then `syncToken`; handles `cancelled`,
+      410 recovery, all-day anchoring, per-calendar cursors.
+- [x] `deploy/com.jarvis.calendar.plist` (15 min) and `com.jarvis.gmail.plist`
+      (30 min), same shape as the scheduler. Added to `install-daemon.sh`.
+- [x] `ingest/gmail.py` — context pass plus extraction into `proposals`, with
+      both spend ceilings.
+- [x] `handlers.search_email` + the `query` context builder + an MCP tool, so
+      mail reaches both the fast and the deep path.
+- [x] `GET /proposals`, `POST /proposals/{id}/accept|reject` — accept goes
+      through `mutations`. `GET /inbox`. `/health` reports ingest staleness.
+- [ ] Review tab in the app. The endpoints are ready; the Swift is not written.
 - [ ] Morning brief, templated.
 
 ---
@@ -277,9 +357,14 @@ Delivered by APNs, so it can carry actions the way fired reminders already do.
 
 | Risk | Mitigation |
 | :-- | :-- |
-| Refresh token dies at 7 days, ingestion stops silently | Production publishing status; loud failure on refresh; heartbeat in `sync_state` |
+| Refresh token dies at 7 days, ingestion stops silently | Production publishing status; loud failure on refresh; `--check` on day 8; `/health` reports `sync_state` staleness |
+| A scope is silently unticked on the consent screen | `--authorize` refuses a partial grant; `--check` re-verifies and probes both APIs |
+| The refresh token is destroyed by a crash mid-write | Atomic save: temp file at 0600 plus `os.replace` |
 | Google tightens unverified restricted-scope access | Documented fallback: iCal URL + IMAP app password (§2) |
 | Cancelled meetings linger in the agenda | Incremental sync only; handle `status: "cancelled"` as a soft delete |
+| The same meeting on two calendars flaps between copies | `external_id` is `{calendarId}:{eventId}`, so the two rows cannot collide |
 | Email extraction pollutes the agenda | Proposals table; no path from extraction to `events` without a human |
+| Email *context* pollutes the agenda | It structurally cannot — `email_messages` is not a domain table and is never read as one |
 | Recurring events explode the table | `singleEvents=true`, bounded window, and re-fetch rather than store rules |
-| Uncapped Haiku spend on an inbox sweep | Per-run ceiling in config, measured against the token columns |
+| Uncapped Haiku spend on an inbox sweep | Two ceilings: message count and dollars, checked against the live tally |
+| One broken calendar stops the others | Per-calendar cursors and error isolation in `sync()` |
