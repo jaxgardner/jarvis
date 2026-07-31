@@ -82,8 +82,11 @@ TOOLS: list[dict] = [
     {
         "name": "query",
         "description": (
-            "Answer a question about what is already stored — the schedule, "
-            "notes, or people. Use for any question, never to record anything."
+            "Answer a QUESTION about what is already stored — the schedule, "
+            "notes, or people. The user must be asking for information: "
+            "'what's on tomorrow', 'when is my dentist appointment', 'what did "
+            "I say about Sarah'. A statement that something changed is not a "
+            "question — do not use this tool for it."
         ),
         "input_schema": {
             "type": "object",
@@ -104,9 +107,13 @@ TOOLS: list[dict] = [
         # available move is the duplicate.
         "name": "reschedule",
         "description": (
-            "Change the time of something already recorded. Use when the user "
-            "says something moved, got pushed, or is now at a different time — "
-            "never add a second copy of it."
+            "Change the time of something already recorded. Use whenever the "
+            "user STATES that an existing thing is now at a different time. "
+            "These are all reschedules, not questions and not new items: "
+            "'dentist moved to friday', 'lunch is now at 1', 'push the meeting "
+            "to thursday', 'the call got bumped to tomorrow'. Terse phrasing "
+            "like '<thing> moved to <time>' is the common case. Never add a "
+            "second copy of something that already exists."
         ),
         "input_schema": {
             "type": "object",
@@ -205,7 +212,12 @@ cancel when the user is fixing something you just misheard.
 - Anything requiring research, the web, or multi-step work -> escalate.
 
 The input is dictated speech, so it may be lightly garbled. Interpret it \
-charitably.\
+charitably.
+
+One distinction is worth being careful about, because it is easy to get \
+backwards: a STATEMENT that something changed is not a QUESTION about it. \
+"dentist moved to friday" is the user telling you a fact — reschedule it. \
+Only reach for query when they are actually asking you something.\
 """
 
 

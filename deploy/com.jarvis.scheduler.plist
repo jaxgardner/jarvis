@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis scheduler — LaunchDaemon, 60s interval.
+
+  Separate from com.jarvis.api on purpose (design principle 3): reminders must
+  fire even when the agent is broken. If the API daemon is crash-looping or
+  mid-deploy, this one is unaffected.
+
+  StartInterval, not KeepAlive: each run is one tick that exits. A hung tick
+  can't wedge the schedule, and launchd skips a run rather than stacking
+  overlapping copies — though the UPDATE...RETURNING claim makes overlap safe
+  anyway.
+
+  Install:  sudo ./deploy/install-daemon.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>scheduler.run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/scheduler.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/scheduler.err.log</string>
+</dict>
+</plist>

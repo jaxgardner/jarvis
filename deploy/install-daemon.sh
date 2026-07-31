@@ -1,14 +1,13 @@
 #!/bin/bash
-# Install the Jarvis API LaunchDaemon. Run with sudo:
+# Install the Jarvis LaunchDaemons. Run with sudo:
 #
 #     sudo ./deploy/install-daemon.sh
 #
-# Re-running is safe — it unloads the old job before loading the new one.
+# Re-running is safe — each job is unloaded before the new plist is loaded.
 set -euo pipefail
 
-LABEL="com.jarvis.api"
-SRC="$(cd "$(dirname "$0")" && pwd)/${LABEL}.plist"
-DEST="/Library/LaunchDaemons/${LABEL}.plist"
+LABELS=(com.jarvis.api com.jarvis.scheduler)
+HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="/Users/jaxongardner/Library/Logs/jarvis"
 
 if [ "$EUID" -ne 0 ]; then
@@ -16,22 +15,33 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# The daemon runs as jaxongardner, so the log dir must be writable by them.
+# The daemons run as jaxongardner, so the log dir must be writable by them.
 install -d -o jaxongardner -g staff -m 755 "$LOGDIR"
 
-# launchd refuses to load a plist that isn't root-owned.
-install -o root -g wheel -m 644 "$SRC" "$DEST"
+for LABEL in "${LABELS[@]}"; do
+    SRC="${HERE}/${LABEL}.plist"
+    DEST="/Library/LaunchDaemons/${LABEL}.plist"
 
-launchctl bootout system "$DEST" 2>/dev/null || true
-launchctl bootstrap system "$DEST"
-launchctl enable "system/${LABEL}"
+    # launchd refuses to load a plist that isn't root-owned.
+    install -o root -g wheel -m 644 "$SRC" "$DEST"
 
-echo "installed ${DEST}"
+    launchctl bootout "system/${LABEL}" 2>/dev/null || true
+    launchctl bootstrap system "$DEST"
+    launchctl enable "system/${LABEL}"
+    echo "installed ${DEST}"
+done
+
 echo
-echo "status:"
-launchctl print "system/${LABEL}" 2>/dev/null \
-    | grep -E "^\s+(state|pid|last exit code) " || true
-echo
-echo "verify:  curl -s http://127.0.0.1:8000/health"
-echo "logs:    tail -f ${LOGDIR}/api.err.log"
-echo "stop:    sudo launchctl bootout system/${LABEL}"
+for LABEL in "${LABELS[@]}"; do
+    printf '%s: ' "$LABEL"
+    launchctl print "system/${LABEL}" 2>/dev/null \
+        | grep -E "^\s+state = " | head -1 | tr -d '\t' || echo "(not loaded)"
+done
+
+cat <<EOF
+
+verify:  curl -s http://127.0.0.1:8000/health
+logs:    tail -f ${LOGDIR}/api.err.log ${LOGDIR}/scheduler.err.log
+stop:    sudo launchctl bootout system/com.jarvis.api
+         sudo launchctl bootout system/com.jarvis.scheduler
+EOF
