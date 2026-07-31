@@ -135,6 +135,37 @@ def test_all_day_anchoring_follows_the_zone_not_utc():
     assert denver["starts_at"] != tokyo["starts_at"]
 
 
+# ── URL construction ──────────────────────────────────────
+
+
+def test_a_calendar_id_containing_a_hash_survives_the_url():
+    """The bug this test exists for, found on the first real run.
+
+    Google's built-in holiday calendar is `en.usa#holiday@group.v.calendar.
+    google.com`. Interpolated raw, that `#` starts a URL *fragment* and
+    everything after it is stripped before the request leaves the process — so
+    Google receives `/calendars/en.usa/events` and answers a truthful,
+    completely baffling 404.
+    """
+    import httpx
+
+    holidays = "en.usa#holiday@group.v.calendar.google.com"
+    path = httpx.Request("GET", cal.events_url(holidays)).url.path
+
+    assert path.endswith("/events"), "the path must not be truncated at the '#'"
+    assert "en.usa" in path and "holiday" in path
+
+
+def test_calendar_ids_cannot_escape_their_path_segment():
+    """quote(safe='') and not quote(): the default leaves '/' alone, which
+    would let an id containing a slash address a different endpoint."""
+    assert "/" not in cal.events_url("a/../b").split("/calendars/")[1].split("/")[0]
+
+
+def test_ordinary_calendar_ids_are_unharmed():
+    assert cal.events_url("me@gmail.com").endswith("/calendars/me%40gmail.com/events")
+
+
 def test_external_id_is_namespaced_by_calendar():
     """The same meeting on your primary and on a shared calendar carries the
     SAME Google event id. Keying on the bare id would collide on

@@ -25,6 +25,7 @@ making /undo useless for exactly the thing it was built for.
 """
 
 import sys
+import urllib.parse
 from datetime import datetime, timedelta
 
 from app import config, timeutil
@@ -115,6 +116,22 @@ def to_row(event: dict, calendar_id: str, tz_name: str) -> dict:
         if event.get("updated")
         else timeutil.to_utc_iso(timeutil.now("UTC")),
     }
+
+
+def events_url(calendar_id: str) -> str:
+    """The events endpoint for one calendar, with the id safely encoded.
+
+    Calendar ids are not opaque tokens — they are addresses, and Google's
+    built-in calendars use characters that mean something in a URL. The US
+    holiday calendar is `en.usa#holiday@group.v.calendar.google.com`, and that
+    `#` starts a *fragment*: interpolated raw, everything after it is stripped
+    before the request leaves the process, so Google receives a request for
+    `/calendars/en.usa` and answers a truthful, baffling 404.
+
+    quote(safe="") and not quote(): the default leaves `/` alone, which would
+    let an id containing a slash escape its path segment.
+    """
+    return f"{BASE}/calendars/{urllib.parse.quote(calendar_id, safe='')}/events"
 
 
 def external_id(calendar_id: str, event_id: str) -> str:
@@ -237,7 +254,7 @@ def sync_calendar(calendar_id: str, tz_name: str) -> dict:
             params["pageToken"] = page_token
 
         try:
-            payload = get(f"{BASE}/calendars/{calendar_id}/events", params)
+            payload = get(events_url(calendar_id), params)
         except ApiError as exc:
             if exc.status == 410 and not full:
                 # Routine. Google expires sync tokens on its own schedule, and
@@ -287,10 +304,11 @@ def sync(tz_name: str | None = None) -> dict:
     `sync_state` row records which one broke.
     """
     tz_name = tz_name or config.DEFAULT_TZ
+    selected = calendars()
     results: list[dict] = []
     errors: list[str] = []
 
-    for calendar in calendars():
+    for calendar in selected:
         calendar_id = calendar["id"]
         try:
             results.append(sync_calendar(calendar_id, tz_name))
@@ -301,6 +319,10 @@ def sync(tz_name: str | None = None) -> dict:
                 state.failed(conn, f"{state.CALENDAR_PREFIX}{calendar_id}", str(exc))
 
     return {
+        # Attempted and succeeded, separately. Reporting only successes prints
+        # "calendars=1" after trying two, which reads like the second one was
+        # never selected rather than like it failed.
+        "attempted": len(selected),
         "calendars": len(results),
         "written": sum(r["written"] for r in results),
         "deleted": sum(r["deleted"] for r in results),
@@ -352,8 +374,8 @@ def main() -> int:
         return 1
 
     print(
-        f"calendars={result['calendars']} written={result['written']} "
-        f"deleted={result['deleted']}"
+        f"calendars={result['calendars']}/{result['attempted']} "
+        f"written={result['written']} deleted={result['deleted']}"
     )
     for error in result["errors"]:
         print(f"  ERROR {error}", file=sys.stderr)

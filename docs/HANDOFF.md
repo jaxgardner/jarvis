@@ -191,6 +191,7 @@ Each of these cost real time to find. They are all load-bearing.
 | :-- | :-- |
 | **OAuth Testing status** | Refresh tokens die at 7 days, silently. `--check` on day 8 is the gate |
 | **A silently unticked scope** | Google's consent screen is per-scope checkboxes. A partial grant stores, refreshes and looks healthy, then 403s only when that ingester runs. `--authorize` refuses it now |
+| **Calendar ids must be URL-encoded** | Google's holiday calendars look like `en.usa#holiday@group.v.calendar.google.com`. That `#` is a URL fragment: interpolated raw, everything after it is stripped before the request is sent, Google receives `/calendars/en.usa/events` and answers a truthful, baffling **404**. Found on the first real run |
 | **Google event ids are shared across calendars** | The same meeting on primary and a shared calendar carries the same id. Keyed on the bare id, the two rows collide on `idx_events_ext` and flap forever. Hence `{calendarId}:{eventId}` |
 | **Sync cursors expire on Google's schedule** | Calendar 410, Gmail 404. Both routine — drop the cursor, refetch. Treated as fatal, the ingester stops permanently after a quiet week |
 | **`timeMin` + `syncToken` is rejected** | Google refuses the combination outright. The window is baked into the cursor by the first sync |
