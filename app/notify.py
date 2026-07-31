@@ -9,9 +9,11 @@ while an exception would abort the whole run and take every *other* due
 reminder down with it. The APNs cutover swapped the backend underneath this
 signature; it did not change the signature, and neither should anything else.
 
-Backends are selected by `PUSH_BACKENDS` (default `ntfy`). Running
-`ntfy,apns` sends both — which is how the APNs cutover is meant to be done:
-a fortnight of dual delivery, then drop ntfy once APNs has been quiet-free.
+Backends are selected by `PUSH_BACKENDS` (default `ntfy`). Running `ntfy,apns`
+sends both, which is the safe way to move between them: dual delivery until the
+new backend has gone a stretch without a silent miss, then drop the old one.
+The Mini runs `apns` alone; the default stays `ntfy` so a checkout without a
+`.env` does not quietly depend on APNs credentials it hasn't got.
 """
 
 import httpx

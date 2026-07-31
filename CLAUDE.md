@@ -173,8 +173,19 @@ Deterministic, and it saves a round trip.
   pre-boot unlock screen where neither LaunchAgents nor LaunchDaemons run.
   Unattended recovery from power loss is not currently possible; use
   `sudo fdesetup authrestart` for planned reboots.
-- **Push is ntfy**, not Pushover. One `POST {NTFY_SERVER}/{NTFY_TOPIC}`. The
-  topic name is the only secret — treat it as a password.
+- **Push is APNs here**, selected by `PUSH_BACKENDS` — this deployment runs
+  `apns` alone, the cutover having already happened. The code default is still
+  `ntfy`, so a fresh checkout without a `.env` behaves differently from the
+  Mini. `ntfy,apns` fans out to both, which is how the cutover was done.
+  If ntfy is in use, its topic name is the only secret — treat it as a password.
+- **`notify.push()` returns a bool and never raises.** `scheduler/run.py` calls
+  it in a loop over every due reminder: `False` requeues that one reminder,
+  where an exception would abort the tick and take every *other* due reminder
+  with it. Preserve both halves.
+- **No registered device makes `push()` return `False`**, so on `apns` alone
+  the scheduler retries every tick until the reminder ages out at six hours.
+  Deliberate: the alternative is reporting delivery of a notification that went
+  nowhere, which is the exact failure this subsystem exists to make loud.
 - Python is pinned to **3.12** (not the system 3.14) because `ctranslate2` and
   the Kokoro stack trail new CPython on prebuilt wheels. Matters if local TTS
   ever lands.

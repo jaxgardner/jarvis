@@ -61,10 +61,12 @@ def ntfy_topic() -> str:
 
 
 # ── push ──────────────────────────────────────────────────
-# PUSH_BACKENDS is a comma-separated list, and the default is deliberately
-# "ntfy" alone. The APNs cutover is opt-in and expected to run as
-# "ntfy,apns" for a fortnight: "reminders silently stop firing" is on the
-# risk table, and swapping the push backend is precisely how that happens.
+# PUSH_BACKENDS is a comma-separated list. The Mini runs "apns"; the default
+# here is deliberately "ntfy" alone, so a checkout without a .env does not
+# depend on APNs credentials it does not have. Moving between backends means
+# running "ntfy,apns" until the new one has proven quiet-free — "reminders
+# silently stop firing" is on the risk table, and swapping the push backend is
+# precisely how that happens.
 
 APNS_KEY_PATH = _get("APNS_KEY_PATH")
 APNS_KEY_ID = _get("APNS_KEY_ID")
