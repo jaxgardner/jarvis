@@ -102,6 +102,43 @@ def consume(
     add_to_list(conn, utterance_id, item["name"], "out", source_item_id=item["id"])
 
 
+def add_item(
+    conn: sqlite3.Connection,
+    utterance_id: int | None,
+    name: str,
+    *,
+    category: str | None = None,
+    location: str | None = None,
+    expires_on: str | None = None,
+    quantity: float | None = None,
+    unit: str | None = None,
+) -> int:
+    """Put something in the house immediately, no review step.
+
+    The review screen exists because a *model* read a receipt and might have
+    read it wrong. Here the user is the source — this is the same act as
+    confirming, so making them confirm their own sentence would be ceremony.
+
+    Logged through the mutations helper like every other voice action, so it
+    undoes normally.
+    """
+    return mutations.insert(
+        conn,
+        utterance_id,
+        "pantry_items",
+        {
+            "name": name,
+            "category": category,
+            "location": location or "pantry",
+            "expires_on": expires_on,
+            "expiry_source": "default" if expires_on else None,
+            "quantity": quantity,
+            "unit": unit,
+            "status": "active",
+        },
+    )
+
+
 def add_to_list(
     conn: sqlite3.Connection,
     utterance_id: int | None,

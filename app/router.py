@@ -121,6 +121,37 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "add_item",
+        "description": (
+            "Record that food is now IN the house. Use when the user says "
+            "they have something or are putting it away: 'add a gallon of "
+            "milk to the fridge', 'I've got two chicken breasts in the "
+            "freezer', 'we have eggs now'. This is the opposite of "
+            "consume_item. It is NOT a request to buy — 'we need milk' is "
+            "add_to_list."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The food, in a word or two. e.g. 'whole milk'.",
+                },
+                "quantity": {"type": "number", "description": "How many, if said."},
+                "unit": {
+                    "type": "string",
+                    "description": "e.g. 'gal', 'lb', 'ct'. Omit if not said.",
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["fridge", "freezer", "pantry"],
+                    "description": "Only if the user says where it is going.",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "add_to_list",
         "description": (
             "Put something on the shopping list without claiming anything "
@@ -310,6 +341,8 @@ Choosing the tool:
 - A fact to retain, with no time -> add_note.
 - Food being used up or run out -> consume_item. "we're out of X", "finished \
 the X" are statements about the kitchen, not requests to buy.
+- Food arriving in the house -> add_item. "we have X now", "put X in the \
+freezer". The opposite of consume_item, and still not a request to buy.
 - Something to buy, with no claim about what you have -> add_to_list.
 - What to cook, or a recipe from what is in the house -> escalate.
 - A question about stored information -> query.

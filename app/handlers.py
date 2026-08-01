@@ -7,7 +7,7 @@ model problem. Deterministic, and it saves a round trip against the 2s budget.
 
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from app import mutations, router, timeutil
 
@@ -103,6 +103,49 @@ def consume_item(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     if partial:
         return f"Noted — some of the {item['name']} used, still marked as on hand."
     return f"Got it — {item['name']} is finished, and it's on the shopping list."
+
+
+def add_item(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    """Record food that is now in the house.
+
+    Straight to `active` with no review, unlike the receipt path. The review
+    screen guards against a *model* having misread a photograph; here the user
+    is stating what they have, so there is nothing to second-guess. The date
+    still comes from the shelf-life table and is marked `default`, which the
+    fridge list renders as "estimated".
+    """
+    from pantry import inventory, shelflife
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        raise ValueError("add_item needs a name")
+
+    category = shelflife.guess_category(name)
+    location = args.get("location")
+    if location not in shelflife.LOCATIONS:
+        location = shelflife.DEFAULT_LOCATION.get(category, "pantry")
+
+    today = timeutil.now(tz_name).date().isoformat()
+    expires_on = shelflife.expires_on(category, location, today)
+
+    inventory.add_item(
+        conn,
+        utterance_id,
+        name,
+        category=category,
+        location=location,
+        expires_on=expires_on,
+        quantity=args.get("quantity"),
+        unit=(args.get("unit") or "").strip() or None,
+    )
+
+    where = "the fridge" if location == "fridge" else f"the {location}"
+    if expires_on is None:
+        return f"Added {name} to {where}."
+    days = (date.fromisoformat(expires_on) - date.fromisoformat(today)).days
+    if days <= 1:
+        return f"Added {name} to {where} — use it by tomorrow."
+    return f"Added {name} to {where}, good for about {days} days."
 
 
 def add_to_list(conn, utterance_id: int, args: dict, tz_name: str) -> str:
@@ -725,6 +768,7 @@ FAST_HANDLERS = {
     "add_reminder": add_reminder,
     "add_note": add_note,
     "consume_item": consume_item,
+    "add_item": add_item,
     "add_to_list": add_to_list,
     "reschedule": reschedule,
     "cancel": cancel,

@@ -435,3 +435,76 @@ def test_the_query_tool_offers_a_pantry_kind():
 
     query_tool = next(t for t in router.TOOLS if t["name"] == "query")
     assert "pantry" in query_tool["input_schema"]["properties"]["kind"]["enum"]
+
+
+# ── voice: adding something you already have ──────────────
+
+
+def test_add_item_puts_food_straight_in_the_fridge(db):
+    """No review step, and that is the point: you are the source here. The
+    review screen exists because a *model* read a receipt — when you say what
+    you have, there is nothing to second-guess."""
+    reply = say(db, "add_item", {"name": "whole milk"})
+
+    item = rows(db, "SELECT * FROM pantry_items")[0]
+    assert item["status"] == "active"
+    assert item["name"] == "whole milk"
+    assert item["location"] == "fridge", "from the category default"
+    assert "milk" in reply.lower()
+
+
+def test_add_item_dates_from_the_shelf_life_table(db):
+    say(db, "add_item", {"name": "spinach"})
+    item = rows(db, "SELECT * FROM pantry_items")[0]
+
+    assert item["category"] == "spinach"
+    assert item["expires_on"] is not None
+    assert item["expiry_source"] == "default", "shown as 'estimated' in the app"
+
+
+def test_add_item_honours_a_spoken_location(db):
+    say(db, "add_item", {"name": "chicken", "location": "freezer"})
+    item = rows(db, "SELECT * FROM pantry_items")[0]
+    assert item["location"] == "freezer"
+
+
+def test_add_item_keeps_quantity_and_unit(db):
+    say(db, "add_item", {"name": "eggs", "quantity": 12, "unit": "ct"})
+    item = rows(db, "SELECT * FROM pantry_items")[0]
+    assert item["quantity"] == 12
+    assert item["unit"] == "ct"
+
+
+def test_add_item_without_a_known_category_still_stores_it(db):
+    reply = say(db, "add_item", {"name": "plutonium"})
+    item = rows(db, "SELECT * FROM pantry_items")[0]
+
+    assert item["status"] == "active"
+    assert item["category"] is None
+    assert item["expires_on"] is None
+    assert "plutonium" in reply.lower()
+
+
+def test_add_item_is_undoable(db):
+    from app import mutations
+    from app.db import transaction
+
+    say(db, "add_item", {"name": "whole milk"})
+    with transaction() as conn:
+        mutations.undo_last(conn)
+
+    assert rows(db, "SELECT * FROM pantry_items") == []
+
+
+def test_add_item_reply_is_safe_to_speak(db):
+    reply = say(db, "add_item", {"name": "whole milk"})
+    assert "\n" not in reply
+    assert not any(ch in reply for ch in "*_#`[]")
+    assert "2026-" not in reply, "no ISO dates in spoken text"
+
+
+def test_the_router_exposes_add_item():
+    from app import router
+
+    assert "add_item" in {tool["name"] for tool in router.TOOLS}
+    assert "add_item" in router.system_prompt("America/Denver")
