@@ -13,6 +13,21 @@ from app.config import REPO_ROOT
 
 
 @pytest.fixture
+def db(tmp_path, monkeypatch):
+    """A real file-backed database, for tests that need `app.db.transaction()`
+    across more than one connection."""
+    from tests.helpers import apply_migrations
+
+    path = tmp_path / "core.db"
+    apply_migrations(path)
+
+    import app.db as appdb
+
+    monkeypatch.setattr(appdb, "DB_PATH", path)
+    return path
+
+
+@pytest.fixture
 def conn():
     """In-memory DB with the real schema, so tests exercise the real triggers
     and constraints rather than a hand-written approximation."""
@@ -173,3 +188,92 @@ def test_calendar_table_covers_all_seven_weekdays():
     table = router.calendar_table(datetime(2026, 7, 31, 8, 0, tzinfo=ZoneInfo("America/Denver")))
     for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
         assert any(l.strip().startswith(day) for l in table.splitlines()), day
+
+
+# ── undo groups by utterance ──────────────────────────────
+
+
+def test_undo_reverses_every_write_from_one_utterance(db):
+    """A handler that writes twice must undo twice.
+
+    `add_event` with a new person inserts into `people` and `events` under one
+    utterance_id. Reversing only the newest leaves an orphan.
+    """
+    from app import mutations
+    from app.db import transaction
+
+    with transaction() as conn:
+        utterance_id = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('lunch with Sarah','test')"
+            ).lastrowid
+        )
+        person_id = mutations.insert(conn, utterance_id, "people", {"name": "Sarah"})
+        mutations.insert(
+            conn,
+            utterance_id,
+            "events",
+            {"title": "lunch", "starts_at": "2026-08-01T18:00:00Z", "source": "voice"},
+        )
+
+    with transaction() as conn:
+        undone = mutations.undo_last(conn)
+
+    assert undone["table"] == "events", "reports the newest reversed row"
+
+    with transaction() as conn:
+        events = conn.execute("SELECT count(*) AS n FROM events").fetchone()["n"]
+        people = conn.execute(
+            "SELECT count(*) AS n FROM people WHERE id = ?", (person_id,)
+        ).fetchone()["n"]
+        open_rows = conn.execute(
+            "SELECT count(*) AS n FROM mutations WHERE undone_at IS NULL"
+        ).fetchone()["n"]
+
+    assert events == 0
+    assert people == 0, "the person inserted by the same utterance must go too"
+    assert open_rows == 0, "every mutation in the group is stamped undone"
+
+
+def test_undo_does_not_reach_across_utterances(db):
+    from app import mutations
+    from app.db import transaction
+
+    with transaction() as conn:
+        first = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('one','test')"
+            ).lastrowid
+        )
+        mutations.insert(conn, first, "notes", {"body": "keep me"})
+        second = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('two','test')"
+            ).lastrowid
+        )
+        mutations.insert(conn, second, "notes", {"body": "drop me"})
+
+    with transaction() as conn:
+        mutations.undo_last(conn)
+        bodies = [r["body"] for r in conn.execute("SELECT body FROM notes")]
+
+    assert bodies == ["keep me"]
+
+
+def test_undo_of_an_unattributed_mutation_reverses_only_itself(db):
+    """utterance_id is NULL for writes with no utterance behind them.
+
+    Grouping on NULL would sweep up every unattributed mutation ever made.
+    """
+    from app import mutations
+    from app.db import transaction
+
+    with transaction() as conn:
+        mutations.insert(conn, None, "notes", {"body": "first"})
+        mutations.insert(conn, None, "notes", {"body": "second"})
+
+    with transaction() as conn:
+        mutations.undo_last(conn)
+        bodies = [r["body"] for r in conn.execute("SELECT body FROM notes ORDER BY id")]
+
+    assert bodies == ["first"]

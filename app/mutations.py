@@ -122,21 +122,8 @@ def soft_delete(
 # ── undo ──────────────────────────────────────────────────
 
 
-def undo_last(conn: sqlite3.Connection) -> dict | None:
-    """Reverse the most recent mutation that hasn't been undone.
-
-    The undo itself is deliberately NOT logged as a new mutation — it stamps
-    undone_at instead. Logging it would make a second /undo re-apply the change,
-    which is not what anyone means by "undo that".
-    """
-    row = conn.execute(
-        """SELECT * FROM mutations
-             WHERE undone_at IS NULL
-             ORDER BY id DESC LIMIT 1"""
-    ).fetchone()
-    if row is None:
-        return None
-
+def _reverse(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+    """Undo one logged mutation. Does not stamp undone_at — the caller does."""
     table, row_id, op = row["table_name"], row["row_id"], row["op"]
     before = json.loads(row["before_json"]) if row["before_json"] else None
 
@@ -157,9 +144,57 @@ def undo_last(conn: sqlite3.Connection) -> dict | None:
             f"UPDATE {table} SET deleted_at = NULL WHERE id = ?", (row_id,)  # noqa: S608
         )
 
+
+def undo_last(conn: sqlite3.Connection) -> dict | None:
+    """Reverse the most recent utterance's writes.
+
+    One utterance can write more than one row — `add_event` with a new person
+    inserts into `people` and `events`, and consuming an item both updates it
+    and adds to the shopping list. Reversing a single row would leave the
+    other half standing, which is not what anyone means by "undo that".
+
+    Reversed newest-first, which is also the correct order for foreign keys:
+    the referencing row was written after the row it references.
+
+    The undo itself is deliberately NOT logged as a new mutation — it stamps
+    undone_at instead. Logging it would make a second /undo re-apply the
+    change.
+    """
+    newest = conn.execute(
+        """SELECT * FROM mutations
+             WHERE undone_at IS NULL
+             ORDER BY id DESC LIMIT 1"""
+    ).fetchone()
+    if newest is None:
+        return None
+
+    if newest["utterance_id"] is None:
+        # NULL is "no utterance behind this", not a group key. Grouping on it
+        # would sweep up every unattributed mutation ever made.
+        group = [newest]
+    else:
+        group = conn.execute(
+            """SELECT * FROM mutations
+                 WHERE utterance_id = ? AND undone_at IS NULL
+                 ORDER BY id DESC""",
+            (newest["utterance_id"],),
+        ).fetchall()
+
+    for row in group:
+        _reverse(conn, row)
+
+    # %-formatting is not an option here: the SQL itself contains %Y/%m/%d.
+    marks = ",".join("?" for _ in group)
     conn.execute(
         "UPDATE mutations SET undone_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
-        " WHERE id = ?",
-        (row["id"],),
+        f" WHERE id IN ({marks})",
+        tuple(row["id"] for row in group),
     )
-    return {"table": table, "row_id": row_id, "op": op, "before": before}
+
+    before = json.loads(newest["before_json"]) if newest["before_json"] else None
+    return {
+        "table": newest["table_name"],
+        "row_id": newest["row_id"],
+        "op": newest["op"],
+        "before": before,
+    }
