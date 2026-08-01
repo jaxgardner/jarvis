@@ -14,6 +14,9 @@ dependencies = [
     "pyjwt[crypto]>=2.9",
     "python-dotenv>=1.0",
     "mcp>=2.0.0",
+    # FastAPI's UploadFile is multipart/form-data, which Starlette will not
+    # parse without this. Absent it, the receipts endpoint fails at import.
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]
