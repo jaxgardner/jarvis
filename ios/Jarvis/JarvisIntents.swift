@@ -125,9 +125,13 @@ struct ReminderSnippetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // The accent kicker is the one piece of the app's design language
+            // that carries over. The rest is left to the Siri overlay's own
+            // material — a card that ignores it reads as a bug, not as brand.
             Label("Reminder set", systemImage: "bell.badge.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(Theme.mono(11, weight: .semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.accent)
 
             Text(reply)
                 .font(.headline)

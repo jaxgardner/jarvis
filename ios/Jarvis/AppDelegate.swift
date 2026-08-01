@@ -63,9 +63,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case "UNDO":
             _ = try? await JarvisAPI.shared.undo()
         default:
-            // Default action — the notification was tapped. Deep links to the
-            // job result belong here; until 7d there is nowhere to land.
-            break
+            // The notification was tapped. A finished job has somewhere to
+            // land now, and landing on whichever tab happened to be showing
+            // makes the push pointless.
+            // APNs custom payloads survive the round trip as strings often
+            // enough that assuming Int here would silently drop the link.
+            let raw = info["job_id"]
+            if let jobID = raw as? Int ?? Int(raw as? String ?? "") {
+                LaunchRouter.shared.openJob(jobID)
+            }
         }
     }
 }

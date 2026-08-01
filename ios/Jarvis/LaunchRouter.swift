@@ -12,6 +12,11 @@ final class LaunchRouter: ObservableObject {
 
     @Published var shouldStartListening = false
 
+    /// Set when a "Job finished" notification is tapped. Same latch shape as
+    /// the mic flag and for the same reason: the notification may be handled
+    /// before the UI exists.
+    @Published var pendingJobID: Int?
+
     private init() {}
 
     func requestListening() {
@@ -22,5 +27,14 @@ final class LaunchRouter: ObservableObject {
     func consumeListeningRequest() -> Bool {
         defer { shouldStartListening = false }
         return shouldStartListening
+    }
+
+    func openJob(_ id: Int) {
+        pendingJobID = id
+    }
+
+    func consumeJobRequest() -> Int? {
+        defer { pendingJobID = nil }
+        return pendingJobID
     }
 }
