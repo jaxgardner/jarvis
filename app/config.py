@@ -39,6 +39,21 @@ def _db_path() -> Path:
 
 DB_PATH = _db_path()
 DEFAULT_TZ = os.getenv("DEFAULT_TZ", "America/Denver").strip()
+
+# ── pantry ────────────────────────────────────────────────
+# Thermal receipt print is hard OCR and Haiku's accuracy on it is unproven.
+# The review screen means a bad read costs edits rather than correctness, so
+# this stays a config knob: if editing is tedious in practice, move to
+# claude-sonnet-4-5 without touching a code path.
+PANTRY_VISION_MODEL = os.getenv("PANTRY_VISION_MODEL", "claude-haiku-4-5").strip()
+
+# Receipt photos live beside the database, outside the repo, for the same
+# reason the database does: they survive a re-clone and are never committed.
+RECEIPT_DIR = DB_PATH.parent / "receipts"
+
+# Local hour at which the day-before expiry push goes out. 17:00 is late
+# enough that you can still cook or shop, early enough to act on.
+PANTRY_EXPIRY_HOUR = int(os.getenv("PANTRY_EXPIRY_HOUR", "17"))
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
 
 # Read lazily via the helpers below — /health must work before these are set,
