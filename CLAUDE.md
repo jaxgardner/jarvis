@@ -119,6 +119,36 @@ Things worth not rediscovering:
   is hard OCR; if reviewing is tedious, move it to Sonnet in `.env` rather
   than touching a code path.
 
+## Voice
+
+Replies are synthesized on the Mini by Kokoro-82M over onnxruntime and played
+by the phone; Apple's `AVSpeechSynthesizer` is the fallback. Two round trips —
+`/say` returns text on its old budget, `/speech` returns audio separately —
+because folding synthesis into `/say` would put half a second inside the
+endpoint whose p95 is the system's headline number.
+
+- **The filesystem is the switch.** No `TTS_ENABLED`. If the weights are not
+  in `$JARVIS_DB`'s parent `voices/` directory, `/speech` answers 503 and the
+  phone uses the Apple voice. A flag that can disagree with the filesystem is
+  a flag that eventually will.
+- **The fallback is unconditional and the timeout is 3s.** Every failure mode
+  — unreachable, 503, a body that isn't a WAV — takes the same path, because
+  they have the same remedy. Silence while a dead server is waited on is worse
+  than the compact voice.
+- **`speak()` holds a reentrant lock.** It calls `engine()`, which takes the
+  same lock to build the session lazily. A plain `Lock` deadlocks on the first
+  synthesis after a cold start, and only after a cold start — which is the
+  worst kind of bug to ship.
+- **`/speech` is a `def`, not an `async def`.** onnxruntime inference is
+  CPU-bound; a coroutine would block the event loop and stall every other
+  request. Starlette runs sync endpoints in a threadpool.
+- **Voice and pace are `.env`, not code.** `TTS_VOICE` and `TTS_SPEED`. The
+  four British males are `bm_george`, `bm_lewis`, `bm_daniel`, `bm_fable`;
+  which one is right was decided by listening, and re-deciding costs one line.
+- **Neither the weights nor synthesis appear in `/metrics`.** That block is
+  per-utterance and costed against API spend; local synthesis has no token
+  cost. `X-Synth-Ms` and `/health` carry the latency instead.
+
 ## API contracts
 
 ### `POST /say`
