@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from app import config, notify, timeutil
 from app.db import transaction
+from pantry import expiry
 
 # A reminder that came due while the machine was down is worth delivering late
 # — but only up to a point. Past this, waking someone for a 6-hour-old prompt
@@ -161,6 +162,14 @@ def tick(tz_name: str | None = None) -> dict:
 
     with transaction() as conn:
         _beat(conn, "scheduler", f"due={len(due)} fired={len(fired)} missed={len(missed)}")
+
+    # Pantry expiry. Wrapped because a tick must never take out the schedule:
+    # design principle 3 is that reminders fire even when everything else is
+    # broken, and the pantry is very much everything else.
+    try:
+        expiry.sweep(tz_name)
+    except Exception as exc:  # noqa: BLE001
+        print(f"pantry expiry sweep failed: {exc}", file=sys.stderr)
 
     _selfcheck(tz_name)
     return {"due": len(due), "fired": fired, "missed": missed, "failed": failed}
