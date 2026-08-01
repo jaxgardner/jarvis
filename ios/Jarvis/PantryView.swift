@@ -13,17 +13,27 @@ struct PantryView: View {
     @State private var error: String?
     @State private var isLoading = false
     @State private var showingCamera = false
+    @State private var showingManualEntry = false
     @State private var reviewing: Int?
-    @State private var newEntry = ""
 
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader(title: "Pantry", kicker: "What's in the house") {
-                Button {
-                    showingCamera = true
-                } label: {
-                    Label("Receipt", systemImage: "camera.fill")
-                        .font(Theme.mono(12))
+                HStack(spacing: 14) {
+                    // Manual entry first: not everything comes with a receipt,
+                    // and the day-one stocktake is all of it at once.
+                    Button {
+                        showingManualEntry = true
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                            .font(Theme.mono(12))
+                    }
+                    Button {
+                        showingCamera = true
+                    } label: {
+                        Label("Receipt", systemImage: "camera.fill")
+                            .font(Theme.mono(12))
+                    }
                 }
                 .tint(Theme.accent)
             }
@@ -33,6 +43,11 @@ struct PantryView: View {
         .task { await load() }
         .sheet(isPresented: $showingCamera) {
             ReceiptCamera { jpeg in Task { await upload(jpeg) } }
+        }
+        .sheet(isPresented: $showingManualEntry) {
+            ManualEntryView { receiptId in reviewing = receiptId }
+                .environmentObject(api)
+                .environmentObject(toasts)
         }
         .sheet(item: Binding(
             get: { reviewing.map(ReviewTarget.init) },

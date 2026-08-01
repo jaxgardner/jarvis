@@ -220,6 +220,10 @@ struct ReceiptResponse: Decodable {
 struct ReceiptDetail: Decodable {
     let id: Int
     let status: String
+    /// "photo" or "manual". Not inferable from a missing image: pruning clears
+    /// the path of a real photographed receipt thirty days after it is
+    /// confirmed.
+    let source: String?
     let store: String?
     let purchasedOn: String?
     let totalCents: Int?
@@ -607,6 +611,25 @@ final class JarvisAPI: ObservableObject {
             throw APIError.server(status, detail)
         }
         return try decoder.decode(ReceiptResponse.self, from: data)
+    }
+
+    /// Type a list of food instead of photographing a receipt.
+    ///
+    /// Lands in the same `pending` review screen a photograph does — the
+    /// dates are still being proposed by the shelf-life table, and that
+    /// screen is where you agree to them.
+    func createManualReceipt(_ names: [String]) async throws -> ReceiptResponse {
+        struct Created: Decodable {
+            let receiptId: Int
+            let status: String
+            let items: Int
+        }
+        let created: Created = try await send(
+            "/receipts/manual",
+            method: "POST",
+            body: ["items": names.map { ["name": $0] }]
+        )
+        return ReceiptResponse(receiptId: created.receiptId, status: created.status)
     }
 
     func receipt(_ id: Int) async throws -> ReceiptDetail {

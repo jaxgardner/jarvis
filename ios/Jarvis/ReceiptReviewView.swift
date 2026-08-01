@@ -27,7 +27,7 @@ struct ReceiptReviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScreenHeader(title: "Review receipt", kicker: detail?.store ?? "From your camera") {
+            ScreenHeader(title: "Review items", kicker: kicker) {
                 if let detail, !detail.items.isEmpty {
                     Text("\(detail.items.count - deleted.count) items")
                         .font(Theme.mono(12))
@@ -39,6 +39,14 @@ struct ReceiptReviewView: View {
         }
         .jarvisBackground()
         .task { await poll() }
+    }
+
+    /// A manual batch has no store and never had a camera anywhere near it,
+    /// so "From your camera" would be a small lie on the one screen whose job
+    /// is to be trusted.
+    private var kicker: String {
+        if let store = detail?.store, !store.isEmpty { return store }
+        return detail?.source == "manual" ? "Typed by hand" : "From your camera"
     }
 
     @ViewBuilder
