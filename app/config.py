@@ -56,6 +56,13 @@ RECEIPT_DIR = DB_PATH.parent / "receipts"
 PANTRY_EXPIRY_HOUR = int(os.getenv("PANTRY_EXPIRY_HOUR", "17"))
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
 
+# ── speech ────────────────────────────────────────────────
+# The weights are ~310 MB, so they live beside the database for the same
+# reason it does: never committed, and a re-clone does not re-download them.
+TTS_MODEL_DIR = Path(
+    os.getenv("TTS_MODEL_DIR", "").strip() or DB_PATH.parent / "voices"
+).expanduser()
+
 # Read lazily via the helpers below — /health must work before these are set,
 # so importing this module cannot be allowed to fail on a missing key.
 _ANTHROPIC_API_KEY = _get("ANTHROPIC_API_KEY")

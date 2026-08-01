@@ -17,6 +17,10 @@ dependencies = [
     # FastAPI's UploadFile is multipart/form-data, which Starlette will not
     # parse without this. Absent it, the receipts endpoint fails at import.
     "python-multipart>=0.0.9",
+    # Local TTS. The onnxruntime build of Kokoro-82M, not the reference
+    # `kokoro` package — same weights, a seventh of the install, and no
+    # PyTorch in a repo whose dependency list should stay readable.
+    "kokoro-onnx>=0.4",
 ]
 
 [dependency-groups]
