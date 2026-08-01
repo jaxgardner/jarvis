@@ -62,3 +62,47 @@ def test_categories_is_sorted_and_unique():
     """It is interpolated into a tool schema enum, which must be byte-stable
     across runs or the prompt changes for no reason."""
     assert shelflife.CATEGORIES == sorted(set(shelflife.CATEGORIES))
+
+
+# ── guessing a category from a typed name ─────────────────
+
+
+def test_a_plain_category_name_matches_itself():
+    assert shelflife.guess_category("milk") == "milk"
+    assert shelflife.guess_category("spinach") == "spinach"
+
+
+def test_a_qualified_name_still_finds_its_category():
+    """What you actually type: 'whole milk', not 'milk'."""
+    assert shelflife.guess_category("whole milk") == "milk"
+    assert shelflife.guess_category("chicken breast") == "chicken"
+    assert shelflife.guess_category("baby spinach") == "spinach"
+    assert shelflife.guess_category("Greek Yogurt") == "yogurt"
+
+
+def test_matching_is_by_word_not_substring():
+    """The trap this exists to avoid: 'tea' is a substring of 'steak', so
+    naive matching would file a steak under tea and give it a two-year life."""
+    assert shelflife.guess_category("steak") != "tea"
+    assert shelflife.guess_category("cereal") == "cereal"
+
+
+def test_a_multi_word_category_needs_all_its_words():
+    assert shelflife.guess_category("hard cheese") == "cheese_hard"
+    assert shelflife.guess_category("fresh herbs") == "herbs_fresh"
+
+
+def test_an_unknown_name_has_no_category():
+    """Which means no date, which the review screen shows as a blank for you
+    to fill in. A wrong guess is worse than an admitted blank."""
+    assert shelflife.guess_category("plutonium") is None
+    assert shelflife.guess_category("") is None
+    assert shelflife.guess_category(None) is None
+
+
+def test_a_guessed_category_is_a_real_table_key():
+    """Whatever comes out must be usable by days_for, or the date silently
+    goes missing."""
+    for name in ("whole milk", "chicken breast", "sourdough bread", "olive oil"):
+        category = shelflife.guess_category(name)
+        assert category in shelflife.CATEGORIES, name

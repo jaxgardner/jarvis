@@ -20,6 +20,7 @@ a shrug"; it is a real answer, and the review screen renders it as a blank
 date rather than inventing one.
 """
 
+import re
 from datetime import date, timedelta
 
 # category -> {location: days}. A category may list only the locations that
@@ -132,6 +133,60 @@ def days_for(category: str | None, location: str) -> int | None:
     # An unlisted location falls back to the pantry figure rather than to
     # None, so "canned beans in the fridge" still gets a sane default.
     return entry.get("pantry")
+
+
+# Words that name a category the table spells differently. Deliberately tiny:
+# this is a lookup table, not a synonym engine, and anything it misses costs a
+# blank date in a screen you are already reviewing.
+_SYNONYMS = {
+    "yoghurt": "yogurt",
+    "hamburger": "ground_meat",
+    "mince": "ground_meat",
+    "prawns": "shellfish",
+    "shrimp": "shellfish",
+    "salmon": "fish",
+    "tuna": "fish",
+    "turkey": "chicken",
+    "scallions": "onions",
+    "pasta": "pasta_dry",
+    "noodles": "pasta_dry",
+    "soda": "beverages",
+}
+
+
+def guess_category(name: str | None) -> str | None:
+    """Best category for a typed item name, or None.
+
+    For manual entry, where a person types "whole milk" rather than a model
+    reading `GV WHL MLK 1GAL` off a receipt. Pure string work on purpose: the
+    input is already text, so there is nothing to OCR, and keeping a model out
+    of it means manual entry costs nothing and cannot be slow.
+
+    Matched by *word*, never by substring. "tea" is a substring of "steak",
+    and filing a steak under tea would hand it a two-year shelf life — the
+    kind of wrong that is worse than no answer at all.
+
+    None is a real answer meaning "no date", which the review screen renders
+    as a blank for you to fill in.
+    """
+    if not name:
+        return None
+    words = set(re.findall(r"[a-z]+", name.lower()))
+    if not words:
+        return None
+
+    for word in words:
+        if word in _SYNONYMS:
+            return _SYNONYMS[word]
+
+    # Longest match wins, so "hard cheese" beats a bare "cheese" would-be
+    # match and lands on cheese_hard rather than something shorter.
+    best: str | None = None
+    for category in CATEGORIES:
+        parts = set(category.split("_"))
+        if parts <= words and (best is None or len(parts) > len(best.split("_"))):
+            best = category
+    return best
 
 
 def expires_on(category: str | None, location: str, purchased_on: str) -> str | None:
