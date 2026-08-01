@@ -277,3 +277,23 @@ def test_undo_of_an_unattributed_mutation_reverses_only_itself(db):
         bodies = [r["body"] for r in conn.execute("SELECT body FROM notes ORDER BY id")]
 
     assert bodies == ["first"]
+
+
+def test_log_insert_makes_an_existing_row_undoable_as_an_insert(db):
+    from app import mutations
+    from app.db import transaction
+
+    with transaction() as conn:
+        row_id = int(
+            conn.execute(
+                "INSERT INTO notes (body) VALUES ('drafted earlier')"
+            ).lastrowid
+        )
+        mutations.log_insert(conn, None, "notes", row_id)
+
+    with transaction() as conn:
+        undone = mutations.undo_last(conn)
+        left = conn.execute("SELECT count(*) AS n FROM notes").fetchone()["n"]
+
+    assert undone["op"] == "insert"
+    assert left == 0, "undoing an adopted insert deletes the row"

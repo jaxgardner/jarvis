@@ -13,11 +13,20 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from pydantic import BaseModel, Field
 
 from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
+from pantry import images, receipts
 
 app = FastAPI(title="Jarvis", docs_url=None, redoc_url=None)
 
@@ -405,10 +414,15 @@ def ack_reminder(reminder_id: int) -> dict:
 
 
 @app.get("/proposals", dependencies=[Depends(require_token)])
-def proposals(limit: int = 50) -> dict:
+def proposals(limit: int = 50, tz: str | None = None) -> dict:
+    tz_name = tz or config.DEFAULT_TZ
     conn = connect()
     try:
-        return {"proposals": handlers.pending_proposals(conn, max(1, min(limit, 200)))}
+        return {
+            "proposals": handlers.pending_proposals(
+                conn, max(1, min(limit, 200)), tz_name
+            )
+        }
     except sqlite3.OperationalError:
         return {"proposals": []}
     finally:
@@ -453,6 +467,97 @@ def inbox(limit: int = 25, unread_only: bool = False, q: str | None = None) -> d
         return {"messages": []}
     finally:
         conn.close()
+
+
+# ── pantry ────────────────────────────────────────────────
+
+
+@app.post("/receipts", dependencies=[Depends(require_token)])
+async def upload_receipt(
+    background: BackgroundTasks, image: UploadFile = File(...)
+) -> dict:
+    """Upload a receipt photo. Returns immediately; extraction runs behind it.
+
+    Vision on a receipt is 3-6 seconds. Blocking here would make the capture
+    button feel broken, so the client gets a receipt id and polls
+    GET /receipts/{id}, the same contract as /jobs/{id}.
+    """
+    payload = await image.read()
+    media_type = image.content_type or ""
+    if media_type not in images.MEDIA_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"unsupported image type {media_type!r}; "
+            f"send one of {sorted(images.MEDIA_TYPES)}",
+        )
+
+    sha, path = images.store(payload, media_type)
+
+    with transaction() as conn:
+        existing = conn.execute(
+            "SELECT id, status FROM receipts WHERE image_sha256 = ?", (sha,)
+        ).fetchone()
+        if existing:
+            # Same photo, same receipt. Notably this is what keeps a receipt
+            # you discarded discarded.
+            return {"receipt_id": existing["id"], "status": existing["status"]}
+        receipt_id = receipts.create(conn, sha, path)
+
+    today = timeutil.now(config.DEFAULT_TZ).date().isoformat()
+    background.add_task(receipts.fill, receipt_id, payload, media_type, today)
+    return {"receipt_id": receipt_id, "status": "extracting"}
+
+
+@app.get("/receipts/{receipt_id}", dependencies=[Depends(require_token)])
+def get_receipt(receipt_id: int) -> dict:
+    conn = connect()
+    try:
+        found = receipts.detail(conn, receipt_id)
+    finally:
+        conn.close()
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such receipt")
+    return found
+
+
+class ItemEdits(BaseModel):
+    items: list[dict]
+
+
+@app.patch("/receipts/{receipt_id}/items", dependencies=[Depends(require_token)])
+def edit_receipt_items(receipt_id: int, edits: ItemEdits) -> dict:
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT status FROM receipts WHERE id = ?", (receipt_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such receipt")
+        if row["status"] != "pending":
+            # Past confirmation the items are real inventory and are edited as
+            # inventory. A confirmed receipt is a record, not a live document.
+            raise HTTPException(
+                status_code=409, detail=f"receipt is {row['status']}, not pending"
+            )
+        touched = receipts.patch_items(conn, receipt_id, edits.items)
+    return {"updated": touched}
+
+
+@app.post("/receipts/{receipt_id}/confirm", dependencies=[Depends(require_token)])
+def confirm_receipt(receipt_id: int) -> dict:
+    with transaction() as conn:
+        count = receipts.confirm(conn, receipt_id)
+    if count is None:
+        raise HTTPException(status_code=409, detail="receipt is not pending")
+    return {"items": count, "reply": f"Added {count} items to the pantry."}
+
+
+@app.post("/receipts/{receipt_id}/discard", dependencies=[Depends(require_token)])
+def discard_receipt(receipt_id: int) -> dict:
+    with transaction() as conn:
+        ok = receipts.discard(conn, receipt_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="receipt is not pending")
+    return {"discarded": True}
 
 
 # ── dashboard reads ───────────────────────────────────────

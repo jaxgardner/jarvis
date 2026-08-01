@@ -79,6 +79,25 @@ def insert(
     return row_id
 
 
+def log_insert(
+    conn: sqlite3.Connection, utterance_id: int | None, table: str, row_id: int
+) -> None:
+    """Adopt an already-written row into the log as if it had just been inserted.
+
+    For rows that exist before they are *real*. A receipt row is created on
+    upload so its sha256 can block a duplicate, but it is a draft until the
+    user confirms it — and confirming is the moment worth being able to undo.
+    Logging that as an update would make /undo flip the status back and leave
+    every item active, which is half an undo. Logged as an insert, /undo
+    deletes the receipt and CASCADE takes the trip with it.
+
+    Use this only where the write and the user's decision are genuinely at
+    different moments. Everywhere else, `insert` is the right call.
+    """
+    _check(table)
+    _log(conn, utterance_id, table, row_id, "insert", None, _row(conn, table, row_id))
+
+
 def update(
     conn: sqlite3.Connection,
     utterance_id: int | None,
