@@ -126,9 +126,142 @@ struct HealthResponse: Decodable {
         let error: String?
     }
 
+    /// Per-source sync state. `lastRunAt` and `lastOkAt` are separate on
+    /// purpose and must stay separate in the UI: equal means healthy, a gap
+    /// means running-and-failing, both old means not running at all. Those are
+    /// three different fixes, so they can't collapse into one green dot.
+    struct IngestSource: Decodable, Identifiable {
+        let source: String
+        let lastRunAt: String?
+        let lastOkAt: String?
+        let detail: String?
+        let stale: Bool
+
+        var id: String { source }
+
+        enum Condition {
+            case healthy
+            case runningAndFailing
+            case notRunning
+            case neverRun
+        }
+
+        var condition: Condition {
+            guard lastRunAt != nil else { return .neverRun }
+            if !stale { return .healthy }
+            guard lastOkAt != nil else { return .neverRun }
+            // Stale, but something ran recently — it is running and failing.
+            return lastRunAt == lastOkAt ? .notRunning : .runningAndFailing
+        }
+    }
+
+    struct Ingest: Decodable {
+        let sources: [IngestSource]
+        let stale: [String]
+    }
+
     let status: String
     let db: Database
     let configured: [String: Bool]
+    /// Absent on a server older than migration 006.
+    let ingest: Ingest?
+}
+
+/// The email review queue. The one path from mail to the calendar, and it
+/// requires a human at it.
+struct ProposalsResponse: Decodable {
+    struct Proposal: Decodable, Identifiable {
+        let id: Int
+        let source: String
+        let kind: String
+        let summary: String?
+        let confidence: Double
+        let title: String
+        let location: String?
+        /// Rendered by the server, like `/agenda`'s. Never re-derived here.
+        let when: String
+    }
+
+    let proposals: [Proposal]
+}
+
+struct PantryResponse: Decodable {
+    struct Item: Decodable, Identifiable {
+        let id: Int
+        let name: String
+        let rawText: String?
+        let category: String?
+        let quantity: Double?
+        let unit: String?
+        let location: String
+        let expiresOn: String?
+        /// "default" when the shelf-life table proposed it, "user" once you
+        /// have touched it. The fridge list uses this to show which dates you
+        /// actually stand behind.
+        let expirySource: String?
+        let daysLeft: Int?
+    }
+
+    struct ListEntry: Decodable, Identifiable {
+        let id: Int
+        let name: String
+        let reason: String?
+    }
+
+    let items: [Item]
+    let shoppingList: [ListEntry]
+}
+
+struct ReceiptResponse: Decodable {
+    let receiptId: Int
+    let status: String
+}
+
+struct ReceiptDetail: Decodable {
+    let id: Int
+    let status: String
+    let store: String?
+    let purchasedOn: String?
+    let totalCents: Int?
+    let extractError: String?
+    let items: [PantryResponse.Item]
+}
+
+/// Ingested mail — metadata and Google's own snippet. Bodies are never stored,
+/// which is a property of the architecture rather than a gap to paper over.
+struct InboxResponse: Decodable {
+    struct Message: Decodable, Identifiable {
+        let sender: String?
+        let subject: String?
+        let snippet: String?
+        let receivedAt: String?
+        let isUnread: Int?
+
+        /// No id column comes back from `/inbox`, and there is nothing to
+        /// address a message by anyway — the list is read-only.
+        var id: String { "\(receivedAt ?? "")|\(sender ?? "")|\(subject ?? "")" }
+        var unread: Bool { (isUnread ?? 0) != 0 }
+    }
+
+    let messages: [Message]
+}
+
+struct DevicesResponse: Decodable {
+    struct Device: Decodable, Identifiable {
+        let id: Int
+        let label: String
+        let platform: String?
+        let apnsEnv: String?
+        let createdAt: String?
+        let lastSeenAt: String?
+        let revokedAt: String?
+        let hasPush: Int?
+
+        var isRevoked: Bool { revokedAt != nil }
+        var canPush: Bool { (hasPush ?? 0) != 0 }
+    }
+
+    let devices: [Device]
 }
 
 struct MetricsResponse: Decodable {
@@ -184,8 +317,24 @@ enum APIError: LocalizedError {
             return detail.isEmpty ? "Server error \(code)." : detail
         case .transport(let message):
             // Almost always "Tailscale is off" in practice.
-            return "Can't reach the Mini: \(message)"
+            return "\(Failure.unreachablePrefix)\(message)"
         }
+    }
+}
+
+/// Shared vocabulary for the one error that matters most.
+///
+/// The prefix is defined once and stripped once. A screen whose *headline* is
+/// already "Can't reach the Mini" would otherwise print it twice — the message
+/// carries the prefix because it also has to stand alone in a one-line banner.
+enum Failure {
+    static let unreachablePrefix = "Can't reach the Mini: "
+
+    /// The reason without the preamble, for a view that has already said it.
+    static func reason(_ message: String) -> String {
+        message.hasPrefix(unreachablePrefix)
+            ? String(message.dropFirst(unreachablePrefix.count))
+            : message
     }
 }
 
@@ -203,6 +352,16 @@ final class JarvisAPI: ObservableObject {
     }
 
     @Published private(set) var isEnrolled: Bool
+
+    /// The device's token was rejected. App-level rather than per-screen,
+    /// because nothing works until it is re-enrolled and showing the same
+    /// failure on six tabs is just noise.
+    @Published private(set) var isUnauthorized = false
+
+    /// Last request reached the Mini. Drives the status glyph — a quiet,
+    /// always-on answer to "is Tailscale up", which is what this error almost
+    /// always turns out to be.
+    @Published private(set) var isReachable = true
 
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -243,11 +402,13 @@ final class JarvisAPI: ObservableObject {
         guard let token = response.token else { throw APIError.unauthorized }
         Keychain.set(token, for: Self.tokenAccount)
         isEnrolled = true
+        isUnauthorized = false
     }
 
     func forget() {
         Keychain.remove(Self.tokenAccount)
         isEnrolled = false
+        isUnauthorized = false
     }
 
     /// Hand the server this launch's APNs token. iOS re-issues these on
@@ -332,6 +493,160 @@ final class JarvisAPI: ObservableObject {
         try await send("/metrics?days=\(days)")
     }
 
+    // MARK: - Review queue and context
+
+    func proposals(limit: Int = 50) async throws -> ProposalsResponse {
+        try await send("/proposals?limit=\(limit)&tz=\(TimeZone.current.identifier)")
+    }
+
+    /// Writes a real calendar event — and, because a human pressed the button,
+    /// goes through the mutations log, so it is undoable like anything else.
+    @discardableResult
+    func acceptProposal(_ id: Int) async throws -> String {
+        struct Decision: Decodable { let reply: String }
+        let response: Decision = try await send(
+            "/proposals/\(id)/accept?tz=\(TimeZone.current.identifier)",
+            method: "POST",
+            body: [:]
+        )
+        return response.reply
+    }
+
+    /// Permanent. That message will never be proposed again.
+    @discardableResult
+    func rejectProposal(_ id: Int) async throws -> String {
+        struct Decision: Decodable { let reply: String }
+        let response: Decision = try await send(
+            "/proposals/\(id)/reject", method: "POST", body: [:]
+        )
+        return response.reply
+    }
+
+    func inbox(limit: Int = 25, unreadOnly: Bool = false, query: String = "")
+        async throws -> InboxResponse
+    {
+        var path = "/inbox?limit=\(limit)"
+        if unreadOnly { path += "&unread_only=true" }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            let escaped = trimmed.addingPercentEncoding(
+                withAllowedCharacters: .urlQueryAllowed
+            ) ?? trimmed
+            path += "&q=\(escaped)"
+        }
+        return try await send(path)
+    }
+
+    func devices() async throws -> DevicesResponse {
+        try await send("/devices")
+    }
+
+    /// The point of per-device tokens: a lost phone costs one request rather
+    /// than re-keying every client.
+    func revokeDevice(_ id: Int) async throws {
+        struct Revoked: Decodable { let revoked: Bool }
+        let _: Revoked = try await send("/devices/\(id)", method: "DELETE")
+    }
+
+    // MARK: - Pantry
+
+    /// Upload a receipt photo.
+    ///
+    /// Multipart rather than JSON — this is the only binary payload the app
+    /// sends, so it does not go through `send`, which builds JSON bodies.
+    /// Returns as soon as the server has a receipt id; extraction runs behind
+    /// it and the caller polls `receipt(_:)`.
+    func uploadReceipt(_ jpeg: Data) async throws -> ReceiptResponse {
+        guard !host.isEmpty, let credential = deviceToken, !credential.isEmpty else {
+            throw APIError.notConfigured
+        }
+        let authority = host.contains(":") ? host : "\(host):8000"
+        guard let url = URL(string: "http://\(authority)/receipts") else {
+            throw APIError.notConfigured
+        }
+
+        let boundary = "jarvis.\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append(
+            "Content-Disposition: form-data; name=\"image\"; filename=\"receipt.jpg\"\r\n"
+                .data(using: .utf8)!
+        )
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(jpeg)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"
+        )
+        request.httpBody = body
+        // A photo over a home uplink deserves longer than the default. The
+        // server answers in milliseconds; the upload is the slow part.
+        request.timeoutInterval = 60
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+            isReachable = true
+        } catch {
+            isReachable = false
+            throw APIError.transport(error.localizedDescription)
+        }
+
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 401 {
+            isUnauthorized = true
+            throw APIError.unauthorized
+        }
+        guard (200..<300).contains(status) else {
+            let detail = (try? decoder.decode(ErrorDetail.self, from: data))?.detail ?? ""
+            throw APIError.server(status, detail)
+        }
+        return try decoder.decode(ReceiptResponse.self, from: data)
+    }
+
+    func receipt(_ id: Int) async throws -> ReceiptDetail {
+        try await send("/receipts/\(id)")
+    }
+
+    func patchReceiptItems(_ id: Int, edits: [[String: Any]]) async throws {
+        struct Updated: Decodable { let updated: Int }
+        let _: Updated = try await send(
+            "/receipts/\(id)/items", method: "PATCH", body: ["items": edits]
+        )
+    }
+
+    func confirmReceipt(_ id: Int) async throws -> String {
+        struct Confirmed: Decodable { let items: Int; let reply: String }
+        let done: Confirmed = try await send("/receipts/\(id)/confirm", method: "POST")
+        return done.reply
+    }
+
+    func discardReceipt(_ id: Int) async throws {
+        struct Discarded: Decodable { let discarded: Bool }
+        let _: Discarded = try await send("/receipts/\(id)/discard", method: "POST")
+    }
+
+    func pantry() async throws -> PantryResponse {
+        try await send("/pantry")
+    }
+
+    func addShoppingEntry(_ name: String) async throws {
+        struct Added: Decodable { let added: Bool }
+        let _: Added = try await send(
+            "/shopping-list", method: "POST", body: ["name": name]
+        )
+    }
+
+    func resolveShoppingEntry(_ id: Int) async throws {
+        struct Resolved: Decodable { let resolved: Bool }
+        let _: Resolved = try await send("/shopping-list/\(id)", method: "DELETE")
+    }
+
     // MARK: - Transport
 
     private func send<T: Decodable>(
@@ -363,12 +678,20 @@ final class JarvisAPI: ObservableObject {
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
+            isReachable = true
         } catch {
+            isReachable = false
             throw APIError.transport(error.localizedDescription)
         }
 
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 401 { throw APIError.unauthorized }
+        if status == 401 {
+            // Not raised during enrollment: a bad shared token there is a typo
+            // to correct on the form, not a device to re-enrol.
+            if overrideToken == nil { isUnauthorized = true }
+            throw APIError.unauthorized
+        }
+        isUnauthorized = false
         guard (200..<300).contains(status) else {
             let detail = (try? decoder.decode(ErrorDetail.self, from: data))?.detail ?? ""
             throw APIError.server(status, detail)
