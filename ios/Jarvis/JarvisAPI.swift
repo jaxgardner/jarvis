@@ -613,6 +613,39 @@ final class JarvisAPI: ObservableObject {
         return try decoder.decode(ReceiptResponse.self, from: data)
     }
 
+    /// Audio for a reply, in the Mini's local voice.
+    ///
+    /// Three seconds, deliberately short: this is racing `AVSpeechSynthesizer`,
+    /// which is sitting right there and costs nothing. Waiting longer than that
+    /// on a dead server buys silence where a worse voice would do.
+    ///
+    /// Unlike `send`, this touches neither `isReachable` nor `isUnauthorized`.
+    /// A voice that failed is not an enrollment problem and must not put the
+    /// app into a re-enrol state over it.
+    func speech(for text: String) async throws -> Data {
+        guard !host.isEmpty, let credential = deviceToken, !credential.isEmpty else {
+            throw APIError.notConfigured
+        }
+        let authority = host.contains(":") ? host : "\(host):8000"
+        guard let url = URL(string: "http://\(authority)/speech") else {
+            throw APIError.notConfigured
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        request.timeoutInterval = 3
+
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            throw APIError.server(status, "no voice")
+        }
+        return data
+    }
+
     /// Type a list of food instead of photographing a receipt.
     ///
     /// Lands in the same `pending` review screen a photograph does — the
@@ -726,4 +759,8 @@ final class JarvisAPI: ObservableObject {
             throw APIError.server(status, "unreadable response")
         }
     }
+}
+
+extension JarvisAPI: SpeechSource {
+    func audio(for text: String) async throws -> Data { try await speech(for: text) }
 }

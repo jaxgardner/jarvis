@@ -10,8 +10,9 @@ twelve files and gets out of the way.
 """
 
 import sys
-import wave as wavelib
 from pathlib import Path
+
+from speech import wav as wavfile
 
 # Real replies, not lorem ipsum. The confirmations are what you hear forty
 # times a day, and a voice that reads a paragraph beautifully can still be
@@ -46,18 +47,7 @@ def main() -> int:
         for index, line in enumerate(LINES, start=1):
             samples, rate = kokoro.create(line, voice=voice, speed=1.0, lang="en-gb")
             path = OUT / f"{voice}-{index}.wav"
-            with wavelib.open(str(path), "wb") as out:
-                out.setnchannels(1)
-                out.setsampwidth(2)
-                out.setframerate(rate)
-                out.writeframes(
-                    b"".join(
-                        int(max(-1.0, min(1.0, s)) * 32767).to_bytes(
-                            2, "little", signed=True
-                        )
-                        for s in samples
-                    )
-                )
+            path.write_bytes(wavfile.encode(samples, rate))
             print(path)
 
     print(f"\n{len(VOICES) * len(LINES)} files in {OUT}. Listen, then set "

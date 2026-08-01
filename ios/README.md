@@ -20,6 +20,23 @@ The client that replaces the Shortcut.
 The project builds and runs in the simulator without any of this — but with
 `CODE_SIGNING_ALLOWED=NO`, and push does nothing there.
 
+## The voice
+
+Replies are spoken by Kokoro-82M running on the Mini, not by the phone. The
+weights are ~310 MB and are not in the repo:
+
+    VOICES="$HOME/Library/Application Support/jarvis/voices"
+    mkdir -p "$VOICES"
+    curl -L -o "$VOICES/kokoro-v1.0.onnx" \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+    curl -L -o "$VOICES/voices-v1.0.bin" \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+Without them the server answers 503 on `/speech` and the phone uses Apple's
+synthesizer. That is a working configuration — it just sounds like a screen
+reader, which is the thing this exists to fix. `GET /health` reports which
+one you are getting.
+
 ## Layout
 
 | File | What it is |
@@ -28,7 +45,7 @@ The project builds and runs in the simulator without any of this — but with
 | `SetupView.swift` | One-time enrollment, plus the (thin) settings sheet |
 | `TalkView.swift` | The screen that replaces the Shortcut |
 | `Transcriber.swift` | `SpeechAnalyzer` / `SpeechTranscriber`, on device, plus the pause detector |
-| `Speaker.swift` | `AVSpeechSynthesizer` — speaks `reply` verbatim |
+| `Speaker.swift` | Plays the Mini's neural voice; falls back to `AVSpeechSynthesizer` |
 | `JarvisAPI.swift` | The server contract |
 | `Keychain.swift` | Where the device token lives. Not `UserDefaults` |
 | `PushRegistrar.swift` | APNs registration + the Snooze / Done / Undo buttons |
@@ -37,7 +54,9 @@ The project builds and runs in the simulator without any of this — but with
 | `LaunchRouter.swift` | Latch that gets `StartListening` from the intent to the mic |
 | `AgendaView.swift` | What's coming up; swipe a reminder to snooze or complete |
 | `ActivityView.swift` | What you said and what it changed; swipe-to-undo |
-| `JobsView.swift` | Deep-path history, with live refresh while one runs |
+| `ReportsView.swift` | Deep-path history, with live refresh while one runs |
+| `Markdown.swift` | Block-level markdown, so a deep-path result reads as one |
+| `MicOrb.swift` | The one control on the Talk screen |
 | `HealthView.swift` | p50/p95 against the 2s budget, plus token spend |
 
 ## Tests
@@ -71,6 +90,24 @@ The detection is energy-based and lives on the audio thread; `Endpointer` in
 `Transcriber.swift` carries the reasoning, and `JarvisTests/EndpointerTests.swift`
 pins the cases that matter — a café, a mic that opens mid-sentence, a breath
 mid-reminder, and a door slam that produces no text.
+
+**The mic opens before the analyzer does.** Building the speech stack costs the
+better part of a second — three round trips to the speech daemon, then
+`SpeechAnalyzer.start` — and doing that first put the whole second between
+pressing the Action Button and being able to talk. `start` now does the cheap
+half (session, engine, tap) and reports listening; the rest runs behind it while
+captured audio waits in an unbounded stream, so words spoken during setup are
+transcribed late rather than lost. Two consequences worth knowing:
+
+- **Setup failures arrive after `start` has returned**, on `Transcriber.failure`
+  rather than as a thrown error.
+- **The first launch on a device still waits**, because it may have a speech
+  model to download and holding the mic open through a download would be both
+  pointless and rude. `transcriber.modelReady` in `UserDefaults` is the latch.
+
+`Transcriber.prepare()` pays those fixed costs at launch so the *second* press
+doesn't. It cannot help a cold Action-Button launch, where it and `start` begin
+in the same instant — that case is what opening the mic first is for.
 
 ## The Action Button
 

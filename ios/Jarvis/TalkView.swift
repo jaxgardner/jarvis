@@ -11,8 +11,9 @@ import SwiftUI
 /// The Action Button opens this screen already listening, which sets the bar
 /// for the layout: it has to be legible mid-sentence, before you have looked
 /// at it. That is why there is one thing in the middle of the screen and one
-/// control at the bottom, and why the phase is carried by the mic's colour
-/// rather than by a label you would have to read.
+/// control at the bottom, and why the phase is carried by the orb's colour and
+/// motion rather than by a label you would have to read. `MicOrb` is that
+/// control.
 struct TalkView: View {
     @EnvironmentObject private var api: JarvisAPI
     @StateObject private var transcriber = Transcriber()
@@ -79,13 +80,25 @@ struct TalkView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        // The speech stack's fixed costs, paid while you are looking at the
+        // screen rather than after you have pressed the button. Talk is the
+        // default tab, so in practice this runs at launch.
+        .task { transcriber.prepare() }
         // Two hooks, not one: the intent may set the latch before this
         // view exists (cold launch) or after it is already on screen
         // (app already running). `task` catches the first, `onChange` the
         // second, and the latch is read-and-clear so neither double-fires.
-        .task { await startIfRequested() }
+        .task {
+            speaker.source = api
+            await startIfRequested()
+        }
         .onChange(of: router.shouldStartListening) { _, _ in
             Task { await startIfRequested() }
+        }
+        // The mic opens before the analyzer does, so a speech stack that fails
+        // to come up fails after `start` has already returned.
+        .onChange(of: transcriber.failure) { _, message in
+            if let message { error = message }
         }
         // You stopped talking. Same path as tapping the button.
         .onChange(of: transcriber.didEndpoint) { _, reached in
@@ -101,9 +114,16 @@ struct TalkView: View {
         VStack(spacing: 18) {
             switch phase {
             case .idle:
-                Text("Tap the mic — or press the Action Button — to talk to Jarvis.")
-                    .font(Theme.sans(15))
-                    .foregroundStyle(Theme.text3)
+                // A greeting, not an instruction. What was here explained how
+                // to work the button, which is worth exactly one reading and is
+                // then dead text on the screen you open most. An assistant that
+                // is standing by should say so — and it is set in the reply's
+                // own type, a shade under its weight, because it is the same
+                // voice speaking either way.
+                Text("Hello, Sir.")
+                    .font(Theme.sans(24, weight: .medium))
+                    .foregroundStyle(Theme.text2)
+                    .tracking(-0.2)
 
             case .listening:
                 ListeningBars()
@@ -171,41 +191,18 @@ struct TalkView: View {
 
     // MARK: - Mic
 
+    private var orbPhase: MicOrb.Phase {
+        if isSending { return .sending }
+        return transcriber.isListening ? .listening : .idle
+    }
+
     private var micButton: some View {
         Button {
             Task { await toggle() }
         } label: {
-            ZStack {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: transcriber.isListening
-                                ? [Color(oklch: (0.75, 0.19, 25)), Theme.danger]
-                                : [Color(oklch: (0.80, 0.17, 231)), Theme.accent],
-                            center: .init(x: 0.32, y: 0.28),
-                            startRadius: 2,
-                            endRadius: 90
-                        )
-                    )
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
-                    .frame(width: 92, height: 92)
-
-                if isSending {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: transcriber.isListening ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.white)
-                }
-            }
-            .background {
-                MicHalo(
-                    tint: transcriber.isListening ? Theme.danger : Theme.accent,
-                    active: !isSending
-                )
-            }
+            MicOrb(phase: orbPhase)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MicOrbButtonStyle())
         .disabled(isSending)
         .sensoryFeedback(.impact, trigger: transcriber.isListening)
         // "Send now", not "Stop listening": tapping while listening has always
@@ -266,7 +263,7 @@ struct TalkView: View {
             route = response.route
             latencyMs = response.latencyMs
             jobID = response.jobId
-            speaker.speak(response.reply)
+            await speaker.speak(response.reply)
         } catch {
             self.error = error.localizedDescription
         }
@@ -315,28 +312,3 @@ private struct ListeningBars: View {
     }
 }
 
-/// The ring behind the mic: a slow breath when idle, an urgent pulse while
-/// listening. It is the only thing on screen that says which of those two the
-/// app is in without being read.
-private struct MicHalo: View {
-    let tint: Color
-    let active: Bool
-
-    @State private var expanded = false
-
-    var body: some View {
-        Circle()
-            .strokeBorder(tint.opacity(expanded ? 0 : 0.45), lineWidth: 6)
-            .frame(width: 92, height: 92)
-            .scaleEffect(expanded ? 1.35 : 1.0)
-            .animation(
-                active
-                    ? .easeOut(duration: 1.6).repeatForever(autoreverses: false)
-                    : .default,
-                value: expanded
-            )
-            .onAppear { expanded = true }
-            .onChange(of: active) { _, on in expanded = on }
-            .accessibilityHidden(true)
-    }
-}
