@@ -93,6 +93,32 @@ def test_pending_proposals_are_listed(client, db):
     assert body["proposals"][0]["summary"].startswith("Flight UA 412")
 
 
+def test_listing_unpacks_the_payload_for_the_client(db, client):
+    """The phone renders a card, not a JSON blob.
+
+    `when` in particular is rendered here for the same reason /agenda renders
+    it: two implementations of "tomorrow at 3 PM" drift, and the one you'd
+    trust is the one you can't see.
+    """
+    propose(db)
+    proposal = client.get("/proposals?tz=America/Denver").json()["proposals"][0]
+    assert proposal["title"] == "Flight UA 412"
+    assert proposal["location"] == "DEN"
+    # 13:30 UTC is 7:30 AM in Denver, and the date is far enough out to be named.
+    assert proposal["when"] == "Monday, August 10 at 7:30 AM"
+    # The raw payload survives — accepting is what writes the event.
+    assert json.loads(proposal["payload_json"])["starts_at"] == "2026-08-10T13:30:00Z"
+
+
+def test_a_proposal_with_no_time_still_lists(db, client):
+    """It can't be accepted, but hiding it would leave it stuck in the queue
+    with no way to reject it either."""
+    propose(db, payload={"starts_at": None})
+    proposal = client.get("/proposals").json()["proposals"][0]
+    assert proposal["when"] == "no time given"
+    assert proposal["title"] == "Flight UA 412"
+
+
 def test_decided_proposals_leave_the_queue(client, db):
     proposal_id = propose(db)
     client.post(f"/proposals/{proposal_id}/reject")
