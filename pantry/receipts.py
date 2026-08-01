@@ -17,6 +17,7 @@ don't trust is decoration.
 """
 
 import sqlite3
+import uuid
 
 from app import mutations, timeutil
 from pantry import extract, shelflife
@@ -32,6 +33,66 @@ def create(conn: sqlite3.Connection, sha: str, path: str) -> int:
             (sha, path),
         ).lastrowid
     )
+
+
+def create_manual(
+    conn: sqlite3.Connection, items: list[dict], purchased_on: str
+) -> tuple[int, int]:
+    """A batch typed by hand. Returns (receipt_id, item count).
+
+    Lands in `pending`, not `active`: manual entry goes through the same
+    review screen a photographed receipt does. That is not ceremony — dates
+    are still being proposed by the shelf-life table rather than chosen by
+    you, and the screen is where you agree to them.
+
+    The receipt carries no image, so `image_sha256` gets a synthetic key.
+    Photographed receipts dedupe on their hash; two manual batches of the same
+    food are two real events and must not collide.
+    """
+    receipt_id = int(
+        conn.execute(
+            """INSERT INTO receipts (image_sha256, source, status, purchased_on)
+                 VALUES (?, 'manual', 'pending', ?)""",
+            (f"manual:{uuid.uuid4()}", purchased_on),
+        ).lastrowid
+    )
+
+    written = 0
+    for raw in items:
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            # A blank line in a pasted list, not an item.
+            continue
+
+        category = raw.get("category")
+        if category not in shelflife.CATEGORIES:
+            category = shelflife.guess_category(name)
+
+        location = raw.get("location")
+        if location not in shelflife.LOCATIONS:
+            location = shelflife.DEFAULT_LOCATION.get(category, "pantry")
+
+        expires_on = shelflife.expires_on(category, location, purchased_on)
+        conn.execute(
+            """INSERT INTO pantry_items
+                 (receipt_id, raw_text, name, category, quantity, unit,
+                  location, expires_on, expiry_source, status)
+               VALUES (?,?,?,?,?,?,?,?,?,'pending')""",
+            (
+                receipt_id,
+                None,  # no receipt line to preserve — you typed it
+                name,
+                category,
+                raw.get("quantity"),
+                str(raw.get("unit") or "").strip() or None,
+                location,
+                expires_on,
+                "default" if expires_on else None,
+            ),
+        )
+        written += 1
+
+    return receipt_id, written
 
 
 def fill(receipt_id: int, image_bytes: bytes, media_type: str, today: str) -> None:

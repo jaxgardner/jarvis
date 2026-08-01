@@ -384,3 +384,120 @@ def test_the_endpoints_require_a_token(db):
     anonymous = TestClient(app)
     assert anonymous.post("/receipts", files={"image": ("r.png", PNG, "image/png")}).status_code == 401
     assert anonymous.get("/receipts/1").status_code == 401
+
+
+# ── manual entry: a receipt with no photograph ────────────
+
+
+def test_a_manual_batch_lands_in_review_not_the_fridge(client, db):
+    """The whole point of reusing the receipt flow: manual items get the same
+    human gate, so a typo costs an edit rather than a wrong inventory."""
+    response = client.post(
+        "/receipts/manual",
+        json={"items": [{"name": "whole milk"}, {"name": "spinach"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["items"] == 2
+    assert rows(db, "SELECT * FROM pantry_items WHERE status = 'active'") == []
+
+
+def test_manual_items_get_dates_from_the_shelf_life_table(client):
+    receipt_id = client.post(
+        "/receipts/manual",
+        json={"items": [{"name": "whole milk"}, {"name": "rice"}],
+              "purchased_on": "2026-07-31"},
+    ).json()["receipt_id"]
+
+    items = {i["name"]: i for i in client.get(f"/receipts/{receipt_id}").json()["items"]}
+    assert items["whole milk"]["expires_on"] == "2026-08-07"
+    assert items["whole milk"]["category"] == "milk"
+    assert items["whole milk"]["location"] == "fridge"
+    assert items["rice"]["expires_on"] is None, "shelf-stable, no date"
+
+
+def test_an_unrecognised_name_still_gets_a_row(client):
+    """A blank date you fill in beats refusing the item."""
+    receipt_id = client.post(
+        "/receipts/manual", json={"items": [{"name": "plutonium"}]}
+    ).json()["receipt_id"]
+
+    item = client.get(f"/receipts/{receipt_id}").json()["items"][0]
+    assert item["name"] == "plutonium"
+    assert item["category"] is None
+    assert item["expires_on"] is None
+
+
+def test_an_explicit_location_overrides_the_default(client):
+    receipt_id = client.post(
+        "/receipts/manual",
+        json={"items": [{"name": "chicken", "location": "freezer"}],
+              "purchased_on": "2026-07-31"},
+    ).json()["receipt_id"]
+
+    item = client.get(f"/receipts/{receipt_id}").json()["items"][0]
+    assert item["location"] == "freezer"
+    # 270 days frozen, not 2 days in the fridge.
+    assert item["expires_on"] == "2027-04-27"
+
+
+def test_confirming_a_manual_batch_is_one_undoable_unit(client, db):
+    receipt_id = client.post(
+        "/receipts/manual",
+        json={"items": [{"name": "whole milk"}, {"name": "eggs"}]},
+    ).json()["receipt_id"]
+
+    client.post(f"/receipts/{receipt_id}/confirm")
+    assert len(rows(db, "SELECT * FROM pantry_items WHERE status='active'")) == 2
+    assert rows(db, "SELECT table_name, op FROM mutations") == [
+        {"table_name": "receipts", "op": "insert"}
+    ]
+
+    client.post("/undo")
+    assert rows(db, "SELECT * FROM pantry_items") == []
+
+
+def test_a_manual_batch_is_marked_as_such(client, db):
+    """`image_path IS NULL` cannot answer this — pruning nulls the path of a
+    real photographed receipt after thirty days."""
+    client.post("/receipts/manual", json={"items": [{"name": "milk"}]})
+    receipt = rows(db, "SELECT source, image_path FROM receipts")[0]
+    assert receipt["source"] == "manual"
+    assert receipt["image_path"] is None
+
+
+def test_two_manual_batches_do_not_collide(client, db):
+    """Photographed receipts dedupe on image hash. Manual batches have no
+    image, so each one must stand on its own."""
+    first = client.post("/receipts/manual", json={"items": [{"name": "milk"}]})
+    second = client.post("/receipts/manual", json={"items": [{"name": "milk"}]})
+
+    assert first.json()["receipt_id"] != second.json()["receipt_id"]
+    assert len(rows(db, "SELECT * FROM receipts")) == 2
+
+
+def test_an_empty_manual_batch_is_rejected(client):
+    assert client.post("/receipts/manual", json={"items": []}).status_code == 400
+
+
+def test_a_nameless_manual_item_is_dropped(client):
+    receipt_id = client.post(
+        "/receipts/manual",
+        json={"items": [{"name": "  "}, {"name": "milk"}]},
+    ).json()["receipt_id"]
+
+    names = [i["name"] for i in client.get(f"/receipts/{receipt_id}").json()["items"]]
+    assert names == ["milk"]
+
+
+def test_manual_entry_requires_a_token(db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    anonymous = TestClient(app)
+    assert anonymous.post(
+        "/receipts/manual", json={"items": [{"name": "milk"}]}
+    ).status_code == 401

@@ -537,6 +537,29 @@ async def upload_receipt(
     return {"receipt_id": receipt_id, "status": "extracting"}
 
 
+class ManualBatch(BaseModel):
+    items: list[dict]
+    purchased_on: str | None = None
+
+
+@app.post("/receipts/manual", dependencies=[Depends(require_token)])
+def create_manual_receipt(batch: ManualBatch) -> dict:
+    """Type a list of food instead of photographing a receipt.
+
+    Not everything comes with a receipt — a farmers market, a gift, or the
+    baseline stocktake on day one. It lands in the same `pending` review
+    screen a photograph does, because the dates are still being *proposed* by
+    the shelf-life table, and that screen is where you agree to them.
+    """
+    if not batch.items:
+        raise HTTPException(status_code=400, detail="no items")
+
+    purchased_on = batch.purchased_on or timeutil.now(config.DEFAULT_TZ).date().isoformat()
+    with transaction() as conn:
+        receipt_id, count = receipts.create_manual(conn, batch.items, purchased_on)
+    return {"receipt_id": receipt_id, "status": "pending", "items": count}
+
+
 @app.get("/receipts/{receipt_id}", dependencies=[Depends(require_token)])
 def get_receipt(receipt_id: int) -> dict:
     conn = connect()
