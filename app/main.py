@@ -9,7 +9,9 @@ bearer token, because "it's on a private network" is not authentication.
 
 import secrets
 import sqlite3
+import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -20,6 +22,7 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Response,
     UploadFile,
 )
 from pydantic import BaseModel, Field
@@ -27,8 +30,19 @@ from pydantic import BaseModel, Field
 from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
 from pantry import images, inventory, receipts
+from speech import synth
 
-app = FastAPI(title="Jarvis", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Loading the ONNX session takes a couple of seconds. In a thread so it
+    # does not hold the port closed, and unconditional because `warm` already
+    # does nothing on a machine with no weights.
+    threading.Thread(target=synth.warm, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Jarvis", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 
 @dataclass(frozen=True)
@@ -142,6 +156,22 @@ def health() -> dict:
         "configured": config.configured(),
         "ingest": _ingest_health(),
         "pantry": pantry_health,
+        "tts": _tts_health(),
+    }
+
+
+def _tts_health() -> dict:
+    """Why it sounds like a screen reader again, answered without a log file.
+
+    `available` and `loaded` differ for a few seconds after a restart while
+    the warm-up thread runs, and differ permanently on a machine whose weights
+    were deleted — which is the case worth being able to see.
+    """
+    return {
+        "available": synth.available(),
+        "loaded": synth.loaded(),
+        "voice": config.TTS_VOICE,
+        "last_synth_ms": synth.last_synth_ms,
     }
 
 
@@ -809,3 +839,34 @@ def _spend(conn: sqlite3.Connection, window: str) -> dict:
             total * (30 / max(1, int(window.split()[0].lstrip("-")))), 2
         ),
     }
+
+
+class SpeechRequest(BaseModel):
+    # A reply is a sentence or two; the ceiling exists so a pasted deep-path
+    # result cannot occupy the synthesizer for a minute.
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@app.post("/speech", dependencies=[Depends(require_token)])
+def speech(req: SpeechRequest) -> Response:
+    """Text in, audio out. Deliberately unaware of `utterances`.
+
+    A reply is not the only thing worth speaking — a job result or a
+    notification body would use this too — and keying audio to a row would
+    rule that out for no gain.
+
+    `def`, not `async def`: onnxruntime inference is CPU-bound and would block
+    the event loop. Starlette runs sync endpoints in a threadpool.
+    """
+    if not synth.available():
+        # The phone turns this into "use the Apple voice". It is a normal
+        # state on a machine that has never downloaded the weights, not an
+        # error worth logging loudly.
+        raise HTTPException(status_code=503, detail="tts unavailable")
+
+    audio = synth.speak(req.text)
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={"X-Synth-Ms": str(synth.last_synth_ms or 0)},
+    )
