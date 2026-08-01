@@ -63,6 +63,11 @@ TTS_MODEL_DIR = Path(
     os.getenv("TTS_MODEL_DIR", "").strip() or DB_PATH.parent / "voices"
 ).expanduser()
 
+# Set by the audition in docs/superpowers/plans/2026-08-01-jarvis-voice.md.
+# One line to change if it ever grates.
+TTS_VOICE = os.getenv("TTS_VOICE", "bm_george").strip()
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
+
 # Read lazily via the helpers below — /health must work before these are set,
 # so importing this module cannot be allowed to fail on a missing key.
 _ANTHROPIC_API_KEY = _get("ANTHROPIC_API_KEY")
