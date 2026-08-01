@@ -151,7 +151,7 @@ TOOLS: list[dict] = [
                 "question": {"type": "string"},
                 "kind": {
                     "type": "string",
-                    "enum": ["agenda", "when", "recall", "other"],
+                    "enum": ["agenda", "when", "recall", "pantry", "other"],
                     "description": (
                         "The shape of the question. 'agenda' = what is "
                         "happening in a date range ('what's on tomorrow', "
@@ -159,15 +159,19 @@ TOOLS: list[dict] = [
                         "one specific known thing ('when is my dentist "
                         "appointment'). 'recall' = retrieving a stored fact "
                         "('what did I say about Sarah', 'what's the wifi "
-                        "password'). 'other' = anything needing reasoning, "
-                        "counting, or comparison across items."
+                        "password'). 'pantry' = food in the house or the "
+                        "shopping list ('what's in the fridge', 'do we have "
+                        "eggs', 'what do I need at the store'). 'other' = "
+                        "anything needing reasoning, counting, or comparison "
+                        "across items."
                     ),
                 },
                 "subject": {
                     "type": "string",
                     "description": (
-                        "For 'when' and 'recall': the thing being asked about, "
-                        "as a few keywords. e.g. 'dentist', 'Sarah', 'wifi'."
+                        "For 'when', 'recall' and 'pantry': the thing being "
+                        "asked about, as a few keywords. e.g. 'dentist', "
+                        "'Sarah', 'wifi', 'eggs', 'fridge', 'shopping list'."
                     ),
                 },
                 "date_from": {

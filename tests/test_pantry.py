@@ -353,3 +353,85 @@ def test_the_router_prompt_still_fits_its_purpose():
     assert "consume_item" in prompt
     assert "add_to_list" in prompt
     assert len(prompt) < 6000
+
+
+def ask(db, **args):
+    from app import handlers
+    from app.db import connect
+
+    conn = connect()
+    try:
+        return handlers._answer_pantry(conn, {"question": "q", **args}, "America/Denver")
+    finally:
+        conn.close()
+
+
+def test_what_is_in_the_fridge_is_answered_without_a_model_call(db):
+    """A templated answer saves a round trip against the 2s budget, and is
+    the same reasoning the confirmations already use."""
+    stock(db, "whole milk", expires_on="2026-08-07")
+    stock(db, "spinach", expires_on="2026-08-02")
+
+    answer = ask(db, subject="fridge")
+
+    assert answer is not None
+    assert "milk" in answer.lower()
+    assert "spinach" in answer.lower()
+
+
+def test_do_we_have_something_answers_yes_with_the_date(db):
+    stock(db, "eggs", category="eggs", expires_on="2026-08-20")
+    answer = ask(db, subject="eggs")
+
+    assert answer is not None
+    assert "eggs" in answer.lower()
+
+
+def test_do_we_have_something_answers_no_when_you_do_not(db):
+    stock(db, "whole milk")
+    answer = ask(db, subject="eggs")
+
+    assert answer is not None
+    assert "don't" in answer.lower() or "no " in answer.lower()
+
+
+def test_the_shopping_list_is_its_own_question(db):
+    from app.db import transaction
+    from pantry import inventory
+
+    with transaction() as conn:
+        inventory.add_to_list(conn, None, "paper towels", "manual")
+        inventory.add_to_list(conn, None, "milk", "out")
+
+    answer = ask(db, subject="shopping list")
+
+    assert answer is not None
+    assert "paper towels" in answer.lower()
+    assert "milk" in answer.lower()
+
+
+def test_an_empty_list_says_so_rather_than_going_quiet(db):
+    answer = ask(db, subject="shopping list")
+    assert answer is not None
+    assert "nothing" in answer.lower() or "empty" in answer.lower()
+
+
+def test_an_empty_pantry_falls_through_to_the_model(db):
+    """Nothing stored is not the same as a confident 'you have nothing'. The
+    other templaters return None here too, and the model sees the full
+    context before answering."""
+    assert ask(db, subject="fridge") is None
+
+
+def test_pantry_answers_are_safe_to_speak(db):
+    stock(db, "whole milk", expires_on="2026-08-07")
+    answer = ask(db, subject="fridge")
+    assert "\n" not in answer
+    assert "2026-08-07" not in answer, "no ISO timestamps in spoken text"
+
+
+def test_the_query_tool_offers_a_pantry_kind():
+    from app import router
+
+    query_tool = next(t for t in router.TOOLS if t["name"] == "query")
+    assert "pantry" in query_tool["input_schema"]["properties"]["kind"]["enum"]

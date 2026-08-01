@@ -386,6 +386,74 @@ def _answer_recall(conn, args: dict, tz_name: str) -> str | None:
     return f"You noted: {bodies}"
 
 
+# Words meaning "the whole inventory" rather than one specific food.
+_PANTRY_ALL = {"fridge", "freezer", "pantry", "kitchen", "food", "groceries"}
+_PANTRY_LIST = {"shopping list", "list", "store", "shopping"}
+
+
+def _answer_pantry(conn, args: dict, tz_name: str) -> str | None:
+    """Food questions, answered by formatting rows rather than calling a model.
+
+    Returns None when it cannot answer confidently — an empty pantry is not
+    the same as a confident "you have nothing", and falling through lets the
+    model see the full context first. Same contract as the other templaters.
+    """
+    from pantry import inventory
+
+    subject = (args.get("subject") or "").strip().lower()
+
+    if subject in _PANTRY_LIST:
+        listed = inventory.open_list(conn)
+        if not listed:
+            return "There's nothing on the shopping list."
+        return "On the list: " + _join([entry["name"] for entry in listed]) + "."
+
+    location = subject if subject in ("fridge", "freezer", "pantry") else None
+    items = inventory.active(conn, location)
+    if not items:
+        return None
+
+    if subject and subject not in _PANTRY_ALL:
+        # "do we have eggs" — a question about one thing.
+        matches = [
+            item
+            for item in items
+            if subject in item["name"].lower()
+            or subject in (item["category"] or "").lower()
+        ]
+        if not matches:
+            return f"I don't have {subject} in the pantry."
+        first = matches[0]
+        days = first["days_left"]
+        if days is None:
+            return f"Yes — {first['name']}."
+        if days < 0:
+            return f"Yes, but the {first['name']} was due {_days_phrase(-days)} ago."
+        return f"Yes — {first['name']}, good for another {_days_phrase(days)}."
+
+    # The whole inventory. Lead with what is dying, and cap the list: this is
+    # spoken aloud, and nobody wants forty items read at them.
+    soonest = [item for item in items if item["days_left"] is not None][:5]
+    if not soonest:
+        return "Nothing in the pantry has a date on it."
+    parts = [
+        f"{item['name']}, {_days_phrase(item['days_left'])}"
+        if item["days_left"] >= 0
+        else f"{item['name']}, overdue"
+        for item in soonest
+    ]
+    tail = "" if len(items) <= len(soonest) else f", plus {len(items) - len(soonest)} more"
+    return "Expiring soonest: " + _join(parts) + tail + "."
+
+
+def _days_phrase(days: int) -> str:
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "1 day"
+    return f"{days} days"
+
+
 def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # Fast path: the router already told us the question's shape in the call
     # we had to make anyway, so common questions are answered by formatting
@@ -397,6 +465,7 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
         "agenda": _answer_agenda,
         "when": _answer_when,
         "recall": _answer_recall,
+        "pantry": _answer_pantry,
     }.get(kind)
     if templated is not None:
         answer = templated(conn, args, tz_name)
