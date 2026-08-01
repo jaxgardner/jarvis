@@ -265,3 +265,91 @@ def test_a_purchased_entry_can_be_added_again(db):
 
     assert again is not None
     assert len(rows(db, "SELECT * FROM shopping_list WHERE status='open'")) == 1
+
+
+def say(db, tool, args, raw_text="test utterance"):
+    """Run one fast-path handler the way /say does."""
+    from app import handlers
+    from app.db import transaction
+
+    with transaction() as conn:
+        utterance_id = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES (?, 'test')",
+                (raw_text,),
+            ).lastrowid
+        )
+        return handlers.FAST_HANDLERS[tool](conn, utterance_id, args, "America/Denver")
+
+
+def test_consuming_something_you_have_confirms_and_lists_it(db):
+    stock(db, "whole milk")
+    reply = say(db, "consume_item", {"name": "milk"})
+
+    assert "milk" in reply.lower()
+    assert rows(db, "SELECT status FROM pantry_items")[0]["status"] == "consumed"
+    assert rows(db, "SELECT name FROM shopping_list")[0]["name"] == "whole milk"
+
+
+def test_consuming_something_you_do_not_have_still_lists_it(db):
+    """The useful half must still happen. Refusing to add milk because the
+    fridge row is missing is the assistant being pedantic about its own
+    bookkeeping."""
+    reply = say(db, "consume_item", {"name": "milk"})
+
+    assert "list" in reply.lower()
+    assert rows(db, "SELECT name, reason FROM shopping_list") == [
+        {"name": "milk", "reason": "out"}
+    ]
+
+
+def test_a_partial_consume_says_so_and_lists_nothing(db):
+    stock(db, "chicken breast")
+    reply = say(db, "consume_item", {"name": "chicken", "amount": "half"})
+
+    assert rows(db, "SELECT status FROM pantry_items")[0]["status"] == "active"
+    assert rows(db, "SELECT * FROM shopping_list") == []
+    assert "still" in reply.lower() or "left" in reply.lower()
+
+
+def test_add_to_list_is_templated_not_generated(db):
+    reply = say(db, "add_to_list", {"name": "paper towels"})
+    assert reply == "Added paper towels to the list."
+
+
+def test_adding_a_duplicate_says_it_was_already_there(db):
+    say(db, "add_to_list", {"name": "paper towels"})
+    reply = say(db, "add_to_list", {"name": "Paper Towels"})
+
+    assert "already" in reply.lower()
+    assert len(rows(db, "SELECT * FROM shopping_list")) == 1
+
+
+def test_replies_are_safe_to_speak(db):
+    """Every fast-path reply goes straight to a TTS engine."""
+    stock(db, "whole milk")
+    replies = [
+        say(db, "consume_item", {"name": "milk"}),
+        say(db, "add_to_list", {"name": "paper towels"}),
+    ]
+    for reply in replies:
+        assert "\n" not in reply
+        assert not any(ch in reply for ch in "*_#`[]")
+
+
+def test_the_router_exposes_both_pantry_tools():
+    from app import router
+
+    names = {tool["name"] for tool in router.TOOLS}
+    assert {"consume_item", "add_to_list"} <= names
+
+
+def test_the_router_prompt_still_fits_its_purpose():
+    """Byte-stability is the convention; this just keeps the prompt from
+    quietly becoming a document."""
+    from app import router
+
+    prompt = router.system_prompt("America/Denver")
+    assert "consume_item" in prompt
+    assert "add_to_list" in prompt
+    assert len(prompt) < 6000

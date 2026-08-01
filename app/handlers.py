@@ -76,6 +76,48 @@ def add_note(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     return "Noted."
 
 
+def consume_item(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    """Record food used up.
+
+    `amount` is deliberately coarse: present means a partial, absent means
+    finished. See `inventory.consume` for why there is no fractional model.
+
+    A name that matches nothing is not an error. Refusing to add milk to the
+    list because the fridge row is missing is the assistant being pedantic
+    about its own bookkeeping — the useful half still happens.
+    """
+    from pantry import inventory
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        raise ValueError("consume_item needs a name")
+
+    partial = bool((args.get("amount") or "").strip())
+    item = inventory.find(conn, name)
+
+    if item is None:
+        inventory.add_to_list(conn, utterance_id, name, "out")
+        return f"I don't have {name} in the pantry, but I've added it to the list."
+
+    inventory.consume(conn, utterance_id, item, partial)
+    if partial:
+        return f"Noted — some of the {item['name']} used, still marked as on hand."
+    return f"Got it — {item['name']} is finished, and it's on the shopping list."
+
+
+def add_to_list(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    from pantry import inventory
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        raise ValueError("add_to_list needs a name")
+
+    added = inventory.add_to_list(conn, utterance_id, name, "manual")
+    if added is None:
+        return f"{name.capitalize()} is already on the list."
+    return f"Added {name} to the list."
+
+
 def _find_match(conn, what: str) -> tuple[str, dict] | None:
     """Locate an existing event or reminder the user is referring to.
 
@@ -567,16 +609,44 @@ def reject_proposal(conn, proposal_id: int) -> str | None:
     return "Dismissed."
 
 
-def pending_proposals(conn, limit: int = 50) -> list[dict]:
-    return [
-        dict(r)
-        for r in conn.execute(
-            """SELECT id, source, kind, summary, confidence, payload_json, created_at
-                 FROM proposals WHERE status = 'pending'
-                 ORDER BY created_at DESC LIMIT ?""",
-            (limit,),
-        ).fetchall()
-    ]
+def pending_proposals(conn, limit: int, tz_name: str) -> list[dict]:
+    """The review queue, with the payload already unpacked for a phone.
+
+    `title` and `when` are rendered here rather than shipped as a JSON blob for
+    the client to parse, for the same reason /agenda renders `when`: two
+    implementations of "tomorrow at 3 PM" drift, and the one you would trust is
+    the one you can't see. `payload_json` is still returned intact — accepting
+    is what writes the event, and the raw payload is what it writes.
+    """
+    rows = conn.execute(
+        """SELECT id, source, kind, summary, confidence, payload_json, created_at
+             FROM proposals WHERE status = 'pending'
+             ORDER BY created_at DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+    proposals = []
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item["payload_json"])
+        except (TypeError, ValueError):
+            payload = {}
+        item["title"] = (payload.get("title") or "Untitled").strip()
+        item["location"] = payload.get("location")
+        starts_at = payload.get("starts_at")
+        try:
+            item["when"] = (
+                timeutil.speak_datetime(starts_at, tz_name, bool(payload.get("all_day")))
+                if starts_at
+                else "no time given"
+            )
+        except ValueError:
+            # A hand-written row, or a payload from before the extractor
+            # normalised times. Accept() answers the same way rather than 500ing.
+            item["when"] = "no usable time"
+        proposals.append(item)
+    return proposals
 
 
 # `escalate` is handled in main.py — it enqueues a job rather than writing a
@@ -585,6 +655,8 @@ FAST_HANDLERS = {
     "add_event": add_event,
     "add_reminder": add_reminder,
     "add_note": add_note,
+    "consume_item": consume_item,
+    "add_to_list": add_to_list,
     "reschedule": reschedule,
     "cancel": cancel,
     "undo_last": undo_last,

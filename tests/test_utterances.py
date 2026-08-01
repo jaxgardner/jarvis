@@ -89,9 +89,11 @@ def test_the_eight_utterances(client):
     r = say(client, "remember that Sarah's kid is named Theo")
     assert intent_of(r["utterance_id"]) == "add_note"
 
-    # 5. list item — also a note
+    # 5. a grocery list item is a shopping list add, not a note. It used to
+    # route to add_note, which was the only place to put it; the pantry
+    # feature gave it a real home.
     r = say(client, "add milk to the grocery list")
-    assert intent_of(r["utterance_id"]) == "add_note"
+    assert intent_of(r["utterance_id"]) == "add_to_list"
 
     # 6. undo reverses #5, not something older
     r = say(client, "actually no, undo that")
@@ -100,10 +102,11 @@ def test_the_eight_utterances(client):
     try:
         assert (
             conn.execute(
-                "SELECT count(*) c FROM notes WHERE body LIKE '%milk%' AND deleted_at IS NULL"
+                "SELECT count(*) c FROM shopping_list"
+                " WHERE name LIKE '%milk%' AND status = 'open'"
             ).fetchone()["c"]
             == 0
-        ), "undo did not remove the milk note"
+        ), "undo did not remove the milk list entry"
         assert (
             conn.execute(
                 "SELECT count(*) c FROM notes WHERE body LIKE '%Theo%'"

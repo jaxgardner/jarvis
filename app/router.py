@@ -93,6 +93,50 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "consume_item",
+        "description": (
+            "Record that food has been used up or is running out. Use whenever "
+            "the user STATES that something in the kitchen is finished or "
+            "partly used: 'we're out of milk', 'finished the spinach', 'used "
+            "half the chicken', 'the eggs are gone'. This is a statement about "
+            "food, not a request to buy — if they ask you to put something on "
+            "the shopping list, use add_to_list instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The food, in a word or two. e.g. 'milk', 'spinach'.",
+                },
+                "amount": {
+                    "type": "string",
+                    "description": (
+                        "Only when they used PART of it — 'half', 'some', 'most'. "
+                        "Omit entirely when it is finished or they are out."
+                    ),
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "add_to_list",
+        "description": (
+            "Put something on the shopping list without claiming anything "
+            "about what is in the kitchen. Use when the user asks to buy or "
+            "add something: 'add paper towels to the list', 'we need "
+            "batteries', 'remember to buy stamps'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "What to buy."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "query",
         "description": (
             "Answer a QUESTION about what is already stored — the schedule, "
@@ -260,6 +304,10 @@ Choosing the tool:
 - Something at a set time the user is attending -> add_event.
 - Something the user wants to be prompted about -> add_reminder.
 - A fact to retain, with no time -> add_note.
+- Food being used up or run out -> consume_item. "we're out of X", "finished \
+the X" are statements about the kitchen, not requests to buy.
+- Something to buy, with no claim about what you have -> add_to_list.
+- What to cook, or a recipe from what is in the house -> escalate.
 - A question about stored information -> query.
 - An existing thing MOVING to a different time -> reschedule. Never add a \
 second copy of something that already exists.
