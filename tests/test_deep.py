@@ -1,7 +1,10 @@
 """Search fusion and worker mechanics. No network."""
 
+import json
 import os
 import sqlite3
+import subprocess
+import tempfile
 
 import pytest
 
@@ -144,6 +147,41 @@ def test_jobs_do_not_run_inside_the_repo():
     assert REPO_ROOT not in worker.WORK_DIR.parents
 
 
+def test_mcp_server_starts_from_outside_the_repo():
+    """The MCP server has to import from the job's working directory.
+
+    Regression, and an expensive one to diagnose: jobs run in WORK_DIR, and the
+    `cwd` key in mcp.json is not honoured — Claude Code spawns the server with
+    the parent's working directory. `python -m mcp_server.server` then died with
+    ModuleNotFoundError, the CLI reported no MCP failure at all, and the agent
+    simply had no tools. The job "succeeded", answering that it had no way to
+    search email. PYTHONPATH is what makes the import cwd-independent.
+
+    Spawning it for real rather than asserting on the JSON: the thing that broke
+    was whether the process starts, which only running it can answer.
+    """
+    config = json.loads(worker.MCP_CONFIG.read_text())["mcpServers"]["jarvis"]
+    env = {**os.environ, **config.get("env", {})}
+    env.pop("PYTHONHOME", None)
+
+    with tempfile.TemporaryDirectory() as elsewhere:
+        completed = subprocess.run(  # noqa: S603
+            [config["command"], *config["args"]],
+            cwd=elsewhere,
+            env=env,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    # A stdio server given a closed stdin shuts down cleanly; what matters is
+    # that it got far enough to import itself.
+    assert "ModuleNotFoundError" not in completed.stderr, completed.stderr
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_summary_is_one_line():
     assert worker._summarize("first line.\nsecond line.\nthird.").startswith("first line.")
 
@@ -193,3 +231,89 @@ def test_summary_truncates_rather_than_flooding_the_notification():
 
 def test_summary_survives_empty_output():
     assert worker._summarize("") == "Done."
+
+
+# ── pantry, over the deep path ────────────────────────────
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    """A file-backed database, because the MCP tools call app.db.connect()
+    themselves rather than taking a connection."""
+    from tests.helpers import apply_migrations
+
+    path = tmp_path / "deep.db"
+    apply_migrations(path)
+
+    import app.db as appdb
+
+    monkeypatch.setattr(appdb, "DB_PATH", path)
+    return path
+
+
+def test_pantry_inventory_leads_with_what_is_dying(db):
+    """The sort is the whole point. The agent sees 'spinach: 2 days' first
+    and builds the suggestion around it instead of producing something
+    generic from an unordered list."""
+    from app.db import transaction
+    from mcp_server import server
+
+    with transaction() as conn:
+        for name, expires in [
+            ("dried pasta", None),
+            ("whole milk", "2099-08-07"),
+            ("spinach", "2099-08-02"),
+        ]:
+            conn.execute(
+                """INSERT INTO pantry_items (name, expires_on, status, location)
+                     VALUES (?,?, 'active', 'fridge')""",
+                (name, expires),
+            )
+
+    output = server.pantry_inventory()
+
+    assert output.index("spinach") < output.index("whole milk") < output.index("dried pasta")
+
+
+def test_pantry_inventory_reports_days_left_not_iso_dates(db):
+    """The agent is being asked what to cook tonight. 'in 2 days' is the
+    useful framing; a date makes it do arithmetic it gets wrong."""
+    from app.db import transaction
+    from mcp_server import server
+
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO pantry_items (name, expires_on, status, location)
+                 VALUES ('spinach', date('now','+2 days'), 'active', 'fridge')"""
+        )
+
+    output = server.pantry_inventory()
+    assert "2 days" in output
+
+
+def test_pantry_inventory_excludes_unreviewed_items(db):
+    from app.db import transaction
+    from mcp_server import server
+
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO pantry_items (name, status) VALUES ('unreviewed', 'pending')"
+        )
+
+    assert "unreviewed" not in server.pantry_inventory()
+
+
+def test_pantry_inventory_says_so_when_the_fridge_is_empty(db):
+    from mcp_server import server
+
+    assert "nothing" in server.pantry_inventory().lower()
+
+
+def test_pantry_inventory_includes_the_shopping_list(db):
+    from app.db import transaction
+    from mcp_server import server
+
+    with transaction() as conn:
+        conn.execute("INSERT INTO shopping_list (name, reason) VALUES ('eggs','out')")
+
+    assert "eggs" in server.pantry_inventory()

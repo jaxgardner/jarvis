@@ -98,6 +98,52 @@ def get_agenda(days: int = 7) -> str:
 
 
 @mcp.tool()
+def pantry_inventory(location: str | None = None) -> str:
+    """What food is in the house, soonest to expire first, plus the shopping list.
+
+    Use this before suggesting anything to cook. Lead with what expires
+    soonest — the point of a suggestion is usually to stop something being
+    thrown away.
+
+    `location` optionally narrows to 'fridge', 'freezer' or 'pantry'.
+    """
+    from pantry import inventory
+
+    conn = connect()
+    try:
+        items = inventory.active(conn, location)
+        listed = inventory.open_list(conn)
+    finally:
+        conn.close()
+
+    lines: list[str] = []
+    if not items:
+        lines.append("Nothing in the pantry.")
+    else:
+        lines.append("IN THE HOUSE (soonest to expire first):")
+        for item in items:
+            days = item["days_left"]
+            if days is None:
+                when = "no expiry"
+            elif days < 0:
+                when = f"{-days} days overdue"
+            elif days == 0:
+                when = "expires today"
+            elif days == 1:
+                when = "1 day left"
+            else:
+                when = f"{days} days left"
+            quantity = f" x{item['quantity']:g}" if item["quantity"] else ""
+            lines.append(f"  {item['name']}{quantity} [{item['location']}] — {when}")
+
+    if listed:
+        lines.append("")
+        lines.append("ON THE SHOPPING LIST: " + ", ".join(e["name"] for e in listed))
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def add_note(body: str, tags: list[str] | None = None, person: str | None = None) -> str:
     """Store a note. Use this to save research findings and conclusions."""
     with transaction() as conn:
