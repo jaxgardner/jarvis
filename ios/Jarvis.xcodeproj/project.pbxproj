@@ -253,6 +253,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Jarvis;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Photograph grocery receipts so Jarvis can track what is in your fridge.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Jarvis listens when you tap the mic button, and transcribes on device.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech is transcribed on device so Jarvis can act on what you say.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -284,6 +285,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Jarvis;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Photograph grocery receipts so Jarvis can track what is in your fridge.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Jarvis listens when you tap the mic button, and transcribes on device.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speech is transcribed on device so Jarvis can act on what you say.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
