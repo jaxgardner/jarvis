@@ -17,6 +17,14 @@ from speech import wav
 MODEL_NAME = "kokoro-v1.0.onnx"
 VOICES_NAME = "voices-v1.0.bin"
 
+# Kokoro's names carry their language in the first letter: `af_`/`am_` are
+# American, `bf_`/`bm_` British. That letter has to reach espeak-ng, because
+# phonemization is per-language and a mismatch is not an error — it is an
+# American voice reading British phonemes, subtly wrong and unfindable in a
+# log. Derived from the voice rather than configured beside it, so the two
+# cannot disagree; the same reason there is no TTS_ENABLED.
+_LANGS = {"a": "en-us", "b": "en-gb"}
+
 # Reentrant because `speak` holds it across `engine()`, which takes it too.
 # A plain Lock deadlocks on the first synthesis after a cold start.
 _lock = threading.RLock()
@@ -25,6 +33,25 @@ _engine = None
 # Read by /health. Process-local and deliberately not persisted: the question
 # it answers is "is the voice working right now", not "what was p95 in June".
 last_synth_ms: int | None = None
+
+
+def lang_for(voice: str) -> str:
+    """The espeak-ng language a Kokoro voice must be phonemized in.
+
+    Raises on the Japanese, Chinese and European voices in the same weights
+    file. They would need their own language codes and none of this has been
+    heard, so refusing is honest: /speech fails, and the phone falls back to
+    Apple's synthesizer, which is a working configuration. Guessing `en-us`
+    would instead produce confident gibberish nobody would attribute to a
+    config line.
+    """
+    try:
+        return _LANGS[voice[:1]]
+    except KeyError:
+        raise ValueError(
+            f"TTS_VOICE={voice!r} is not an English Kokoro voice. Only the "
+            "af_/am_ (American) and bf_/bm_ (British) families are wired up."
+        ) from None
 
 
 def paths() -> tuple[Path, Path]:
@@ -79,12 +106,13 @@ def speak(text: str) -> bytes:
     """
     global last_synth_ms
     started = time.monotonic()
+    lang = lang_for(config.TTS_VOICE)
     with _lock:
         samples, rate = engine().create(
             text,
             voice=config.TTS_VOICE,
             speed=config.TTS_SPEED,
-            lang="en-gb",
+            lang=lang,
         )
     payload = wav.encode(samples, rate)
     last_synth_ms = int((time.monotonic() - started) * 1000)

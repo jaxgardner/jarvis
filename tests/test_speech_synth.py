@@ -59,6 +59,36 @@ def test_speak_records_its_own_latency(engine):
     assert synth.last_synth_ms >= 0
 
 
+def test_the_voice_picks_its_own_phonemization(engine, monkeypatch):
+    """espeak-ng phonemizes for a language, so it has to match the voice.
+
+    An American voice reading British phonemes is not an error anywhere — it
+    is just subtly wrong, in a way that is hard to place by ear and impossible
+    to find in a log. Deriving the language from the voice name is what makes
+    the two unable to disagree.
+    """
+    monkeypatch.setattr(synth.config, "TTS_VOICE", "af_bella")
+    synth.speak("Got it.")
+    assert engine.calls[-1]["lang"] == "en-us"
+
+    monkeypatch.setattr(synth.config, "TTS_VOICE", "bm_george")
+    synth.speak("Got it.")
+    assert engine.calls[-1]["lang"] == "en-gb"
+
+
+def test_a_non_english_voice_is_refused_rather_than_mispronounced(engine, monkeypatch):
+    """Kokoro ships Japanese and Chinese voices this deployment cannot serve.
+
+    Loud beats silently-wrong: the phone turns a failed /speech into Apple's
+    voice, which is a working configuration. Guessing `en-us` for `jf_alpha`
+    would produce confident gibberish instead.
+    """
+    monkeypatch.setattr(synth.config, "TTS_VOICE", "jf_alpha")
+
+    with pytest.raises(ValueError, match="jf_alpha"):
+        synth.speak("Got it.")
+
+
 def test_an_installed_engine_counts_as_available(engine, monkeypatch, tmp_path):
     monkeypatch.setattr(synth.config, "TTS_MODEL_DIR", tmp_path / "nothing-here")
 

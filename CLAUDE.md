@@ -142,9 +142,20 @@ endpoint whose p95 is the system's headline number.
 - **`/speech` is a `def`, not an `async def`.** onnxruntime inference is
   CPU-bound; a coroutine would block the event loop and stall every other
   request. Starlette runs sync endpoints in a threadpool.
-- **Voice and pace are `.env`, not code.** `TTS_VOICE` and `TTS_SPEED`. The
-  four British males are `bm_george`, `bm_lewis`, `bm_daniel`, `bm_fable`;
-  which one is right was decided by listening, and re-deciding costs one line.
+- **Voice and pace are `.env`, not code.** `TTS_VOICE` and `TTS_SPEED`, read
+  at import — a change needs a daemon restart. Which voice is right was
+  decided by listening, and re-deciding costs one line.
+- **The phonemization language is derived from the voice, never configured.**
+  `af_`/`am_` are American and take `en-us`, `bf_`/`bm_` British and `en-gb`.
+  A mismatch is not an error — it is an American voice reading British
+  phonemes, subtly wrong and invisible in a log — so the two are not allowed
+  to disagree. Kokoro's Japanese, Chinese and European voices are in the same
+  weights file and are refused outright; `/speech` fails and the phone uses
+  Apple's voice, which beats confident gibberish.
+- **The British voices are all trained on tens of minutes**, per Kokoro's
+  model card, except `bf_emma` and `bm_lewis`. `af_bella` and `af_heart` are
+  the only grade-A voices in the set, which is why the deployed voice is
+  American despite the brief having asked for a British one.
 - **Neither the weights nor synthesis appear in `/metrics`.** That block is
   per-utterance and costed against API spend; local synthesis has no token
   cost. `X-Synth-Ms` and `/health` carry the latency instead.
