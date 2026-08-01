@@ -86,6 +86,39 @@ Cursors expire on Google's schedule — Calendar answers **410**, Gmail **404**.
 Both are routine: drop the cursor, refetch in full. An ingester that treats
 either as fatal stops permanently after a quiet week.
 
+## Pantry
+
+A photographed receipt becomes inventory, but only through a human.
+
+`receipts` → `pantry_items` mirrors `proposals` → `events`: extraction
+proposes, a person disposes. The extractor's job is narrow — it reads pixels
+and maps `GV WHL MLK 1GAL` to a name and a category from a fixed enum. **It is
+never asked for an expiry date.** Dates come from `pantry/shelflife.py`, a
+checked-in table, so a wrong date is one line to edit rather than a prompt to
+re-tune. The review screen pre-fills them and you confirm.
+
+Things worth not rediscovering:
+- **Confirming a receipt logs exactly one mutation**, on the `receipts` row —
+  the item writes deliberately bypass the helper. Thirty log rows per shopping
+  trip would bury your last real action, the same reasoning that keeps synced
+  writes out of the log. `pantry_items.receipt_id` is `ON DELETE CASCADE`, so
+  reversing that one insert takes the whole trip with it.
+- **`undo_last` reverses every mutation sharing an `utterance_id`**, not one
+  row. Consuming an item writes twice — the item and the shopping list — and
+  so does `add_event` with a new person. A NULL `utterance_id` is not a group
+  key and still undoes one row at a time.
+- **Expiry pushes are a scheduler sweep, not `reminders` rows.** Reminders
+  would appear in `/agenda` among your appointments, and one scheduled ahead
+  of time would still fire after you finished the milk. The sweep reads
+  `pantry_items` live, so a gone item cannot notify. One batched push a day,
+  at `PANTRY_EXPIRY_HOUR` (default 17:00) local.
+- **Receipt extraction tokens are not in `/metrics`.** That block is
+  per-utterance and a receipt has no utterance behind it. One vision call per
+  shopping trip is not what a spend report is for.
+- `PANTRY_VISION_MODEL` defaults to `claude-haiku-4-5`. Thermal receipt print
+  is hard OCR; if reviewing is tedious, move it to Sonnet in `.env` rather
+  than touching a code path.
+
 ## API contracts
 
 ### `POST /say`
@@ -161,6 +194,14 @@ Deterministic, and it saves a round trip.
 
 ## Local facts that are easy to get wrong
 
+- **`mcp.json`'s `cwd` key is ignored.** Claude Code spawns the MCP server with
+  the *parent's* working directory, which for a job is `WORK_DIR`, not the repo.
+  `python -m mcp_server.server` therefore needs `env.PYTHONPATH` pointing at the
+  repo; without it the server dies on ModuleNotFoundError. The failure is
+  silent — the CLI reports no MCP error and omits `mcp_servers` from its JSON,
+  so the agent just has no tools and the job *succeeds*, answering that it has
+  no way to search your mail. Covered by
+  `test_mcp_server_starts_from_outside_the_repo`.
 - **Prompt caching does not fire here.** Haiku 4.5's minimum cacheable prefix
   is 4096 tokens; the router prompt plus six tool definitions is well under it.
   Keep the prompt byte-stable anyway (free, and matters if it grows), but don't
@@ -198,3 +239,8 @@ Deterministic, and it saves a round trip.
 - Log every utterance with `latency_ms`. Treat p95 > 2s as a bug.
 - `foreign_keys` is per-connection — `app.db.connect()` sets it. Don't open
   raw `sqlite3.connect()` elsewhere.
+- Column naming: `_at` is an instant, ISO 8601 with offset. `_on` is a bare
+  calendar date, `YYYY-MM-DD`, for things that genuinely have no time —
+  `pantry_items.expires_on` is the case that introduced it. An expiration has
+  no time of day, and inventing a midnight offset would be a lie the rest of
+  the system would then have to reason about.

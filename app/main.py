@@ -96,9 +96,37 @@ class SnoozeRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     """Liveness for launchd, uptime checks, and the cellular smoke test."""
+    # The two quiet failures. A receipt stuck in `extracting` means the
+    # background task died and the user is looking at a spinner; active items
+    # past their date mean the review flow stopped being used and the
+    # inventory is drifting away from the actual fridge.
+    pantry_health = {"stuck_receipts": 0, "pending_receipts": 0, "overdue_items": 0}
     try:
         conn = connect()
         try:
+            # Ahead of the migrations count on purpose: that query raises on a
+            # database built straight from the .sql files (no schema_migrations
+            # table), and the pantry block must not be collateral damage.
+            try:
+                pantry_health = {
+                    "stuck_receipts": conn.execute(
+                        """SELECT count(*) AS n FROM receipts
+                             WHERE status = 'extracting'
+                               AND created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-5 minutes')"""
+                    ).fetchone()["n"],
+                    "pending_receipts": conn.execute(
+                        "SELECT count(*) AS n FROM receipts WHERE status = 'pending'"
+                    ).fetchone()["n"],
+                    "overdue_items": conn.execute(
+                        """SELECT count(*) AS n FROM pantry_items
+                             WHERE status = 'active' AND expires_on < date('now')"""
+                    ).fetchone()["n"],
+                }
+            except sqlite3.OperationalError:
+                # /health is liveness for launchd and must answer even on a
+                # database that has not been migrated yet.
+                pass
+
             applied = conn.execute(
                 "SELECT count(*) AS n FROM schema_migrations"
             ).fetchone()["n"]
@@ -113,6 +141,7 @@ def health() -> dict:
         "db": db,
         "configured": config.configured(),
         "ingest": _ingest_health(),
+        "pantry": pantry_health,
     }
 
 

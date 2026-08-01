@@ -11,6 +11,7 @@ loop, so a hung tick can't wedge the schedule permanently.
     uv run python -m scheduler.run
 """
 
+import sqlite3
 import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -212,6 +213,21 @@ def _selfcheck(tz_name: str) -> None:
             "SELECT count(*) AS n FROM reminders WHERE status = 'pending'"
         ).fetchone()["n"]
         _beat(conn, "selfcheck", f"pending={pending}")
+
+        # Piggy-backs on the daily selfcheck rather than running every 60s.
+        # A photo's only use is re-reading a bad extraction, so it ages out 30
+        # days after the receipt is confirmed.
+        #
+        # Guarded: housekeeping must never cost the heartbeat. This runs inside
+        # the transaction that records the beat, so letting it raise would roll
+        # that back and re-push the daily check on every tick — and on a
+        # database predating migration 008 the table isn't there at all.
+        from pantry import images
+
+        try:
+            images.prune(conn)
+        except sqlite3.Error as exc:
+            print(f"receipt image prune failed: {exc}", file=sys.stderr)
 
     notify.push(
         f"Jarvis is running. {pending} reminder(s) pending.",

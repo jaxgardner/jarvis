@@ -176,3 +176,57 @@ def test_dashboard_reads_require_auth(client):
     client.headers.pop("Authorization")
     assert client.get("/activity").status_code == 401
     assert client.get("/jobs").status_code == 401
+
+
+# ── pantry health ─────────────────────────────────────────
+
+
+def test_health_reports_a_stuck_extraction(client, db):
+    """A receipt frozen in 'extracting' means the background task died. That
+    is the quiet failure — the user sees a spinner and assumes it is slow."""
+    from app.db import transaction
+
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO receipts (image_sha256, status, created_at)
+                 VALUES ('a', 'extracting',
+                         strftime('%Y-%m-%dT%H:%M:%SZ','now','-10 minutes'))"""
+        )
+
+    pantry = client.get("/health").json()["pantry"]
+    assert pantry["stuck_receipts"] == 1
+
+
+def test_a_recent_extraction_is_not_yet_stuck(client, db):
+    from app.db import transaction
+
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO receipts (image_sha256, status) VALUES ('a', 'extracting')"
+        )
+
+    assert client.get("/health").json()["pantry"]["stuck_receipts"] == 0
+
+
+def test_health_counts_unreviewed_receipts_and_overdue_food(client, db):
+    from app.db import transaction
+
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO receipts (image_sha256, status) VALUES ('b', 'pending')"
+        )
+        conn.execute(
+            """INSERT INTO pantry_items (name, expires_on, status)
+                 VALUES ('old milk', date('now','-3 days'), 'active')"""
+        )
+
+    pantry = client.get("/health").json()["pantry"]
+    assert pantry["pending_receipts"] == 1
+    assert pantry["overdue_items"] == 1
+
+
+def test_health_still_answers_with_an_empty_pantry(client, db):
+    """/health is liveness for launchd. It must never depend on there being
+    data."""
+    pantry = client.get("/health").json()["pantry"]
+    assert pantry == {"stuck_receipts": 0, "pending_receipts": 0, "overdue_items": 0}
