@@ -13,7 +13,16 @@ from typing import Any
 
 # Whitelist — table names are interpolated into SQL below, so they must never
 # come from anywhere but this module's callers.
-WRITABLE = {"events", "reminders", "people", "projects", "notes"}
+WRITABLE = {
+    "events",
+    "reminders",
+    "people",
+    "projects",
+    "notes",
+    "receipts",
+    "pantry_items",
+    "shopping_list",
+}
 SOFT_DELETE = {"events", "notes"}  # have a deleted_at column
 
 
