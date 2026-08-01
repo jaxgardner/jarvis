@@ -89,3 +89,179 @@ def test_pantry_tables_are_writable_through_the_mutations_helper():
     from app import mutations
 
     assert {"receipts", "pantry_items", "shopping_list"} <= mutations.WRITABLE
+
+
+def stock(db, name, *, category=None, location="fridge", expires_on=None, status="active"):
+    """Put one item in the fridge, bypassing the review flow."""
+    from app.db import transaction
+
+    with transaction() as conn:
+        return int(
+            conn.execute(
+                """INSERT INTO pantry_items
+                     (name, category, location, expires_on, status)
+                   VALUES (?,?,?,?,?)""",
+                (name, category, location, expires_on, status),
+            ).lastrowid
+        )
+
+
+def test_active_lists_soonest_to_expire_first(db):
+    from app.db import connect
+    from pantry import inventory
+
+    stock(db, "pasta", expires_on=None, location="pantry")
+    stock(db, "milk", expires_on="2026-08-07")
+    stock(db, "spinach", expires_on="2026-08-02")
+
+    conn = connect()
+    try:
+        names = [item["name"] for item in inventory.active(conn)]
+    finally:
+        conn.close()
+    assert names == ["spinach", "milk", "pasta"]
+
+
+def test_active_reports_days_left(db, monkeypatch):
+    from app.db import connect
+    from pantry import inventory
+
+    monkeypatch.setattr(inventory, "_today", lambda: "2026-07-31")
+    stock(db, "spinach", expires_on="2026-08-02")
+
+    conn = connect()
+    try:
+        item = inventory.active(conn)[0]
+    finally:
+        conn.close()
+    assert item["days_left"] == 2
+
+
+def test_active_excludes_pending_and_consumed(db):
+    from app.db import connect
+    from pantry import inventory
+
+    stock(db, "unreviewed", status="pending")
+    stock(db, "eaten", status="consumed")
+    stock(db, "real")
+
+    conn = connect()
+    try:
+        assert [i["name"] for i in inventory.active(conn)] == ["real"]
+    finally:
+        conn.close()
+
+
+def test_find_matches_a_substring_of_the_name(db):
+    from app.db import connect
+    from pantry import inventory
+
+    stock(db, "whole milk")
+
+    conn = connect()
+    try:
+        assert inventory.find(conn, "milk")["name"] == "whole milk"
+        assert inventory.find(conn, "MILK")["name"] == "whole milk"
+        assert inventory.find(conn, "orange juice") is None
+    finally:
+        conn.close()
+
+
+def test_find_prefers_the_item_dying_soonest(db):
+    """Two cartons open: 'we're out of milk' means the one you were drinking."""
+    from app.db import connect
+    from pantry import inventory
+
+    stock(db, "whole milk", expires_on="2026-08-20")
+    stock(db, "whole milk", expires_on="2026-08-02")
+
+    conn = connect()
+    try:
+        assert inventory.find(conn, "milk")["expires_on"] == "2026-08-02"
+    finally:
+        conn.close()
+
+
+def test_consume_marks_the_item_and_adds_it_to_the_list(db):
+    from app.db import connect, transaction
+    from pantry import inventory
+
+    item_id = stock(db, "whole milk")
+
+    with transaction() as conn:
+        utterance_id = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('out of milk','test')"
+            ).lastrowid
+        )
+        item = inventory.find(conn, "milk")
+        inventory.consume(conn, utterance_id, item, partial=False)
+
+    assert rows(db, "SELECT status FROM pantry_items")[0]["status"] == "consumed"
+    listed = rows(db, "SELECT name, reason FROM shopping_list")
+    assert listed == [{"name": "whole milk", "reason": "out"}]
+
+
+def test_a_partial_consume_keeps_the_item_and_adds_nothing(db):
+    """'used half the chicken' is not 'buy more chicken'."""
+    from app.db import transaction
+    from pantry import inventory
+
+    stock(db, "chicken breast", location="fridge")
+
+    with transaction() as conn:
+        item = inventory.find(conn, "chicken")
+        inventory.consume(conn, None, item, partial=True)
+
+    assert rows(db, "SELECT status FROM pantry_items")[0]["status"] == "active"
+    assert rows(db, "SELECT * FROM shopping_list") == []
+
+
+def test_undo_after_consume_restores_both_halves(db):
+    """The reason Task 2 exists. Undoing half of this is worse than not
+    undoing at all."""
+    from app import mutations
+    from app.db import transaction
+    from pantry import inventory
+
+    stock(db, "whole milk")
+
+    with transaction() as conn:
+        utterance_id = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('out of milk','test')"
+            ).lastrowid
+        )
+        inventory.consume(conn, utterance_id, inventory.find(conn, "milk"), partial=False)
+
+    with transaction() as conn:
+        mutations.undo_last(conn)
+
+    assert rows(db, "SELECT status FROM pantry_items")[0]["status"] == "active"
+    assert rows(db, "SELECT * FROM shopping_list") == []
+
+
+def test_adding_something_already_on_the_list_is_a_no_op(db):
+    from app.db import transaction
+    from pantry import inventory
+
+    with transaction() as conn:
+        first = inventory.add_to_list(conn, None, "paper towels", "manual")
+        second = inventory.add_to_list(conn, None, "Paper Towels", "manual")
+
+    assert first is not None
+    assert second is None, "the partial unique index is the contract; honour it"
+    assert len(rows(db, "SELECT * FROM shopping_list")) == 1
+
+
+def test_a_purchased_entry_can_be_added_again(db):
+    from app.db import transaction
+    from pantry import inventory
+
+    with transaction() as conn:
+        entry_id = inventory.add_to_list(conn, None, "milk", "out")
+        inventory.resolve_list_entry(conn, None, entry_id, "purchased")
+        again = inventory.add_to_list(conn, None, "milk", "out")
+
+    assert again is not None
+    assert len(rows(db, "SELECT * FROM shopping_list WHERE status='open'")) == 1

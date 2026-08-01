@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
-from pantry import images, receipts
+from pantry import images, inventory, receipts
 
 app = FastAPI(title="Jarvis", docs_url=None, redoc_url=None)
 
@@ -558,6 +558,39 @@ def discard_receipt(receipt_id: int) -> dict:
     if not ok:
         raise HTTPException(status_code=409, detail="receipt is not pending")
     return {"discarded": True}
+
+
+@app.get("/pantry", dependencies=[Depends(require_token)])
+def pantry(location: str | None = None) -> dict:
+    conn = connect()
+    try:
+        items = inventory.active(conn, location)
+        listed = inventory.open_list(conn)
+    finally:
+        conn.close()
+    return {"items": items, "shopping_list": listed}
+
+
+class ListEntry(BaseModel):
+    name: str
+
+
+@app.post("/shopping-list", dependencies=[Depends(require_token)])
+def add_shopping_entry(entry: ListEntry) -> dict:
+    with transaction() as conn:
+        entry_id = inventory.add_to_list(conn, None, entry.name, "manual")
+    return {"id": entry_id, "added": entry_id is not None}
+
+
+@app.delete("/shopping-list/{entry_id}", dependencies=[Depends(require_token)])
+def resolve_shopping_entry(entry_id: int, purchased: bool = True) -> dict:
+    with transaction() as conn:
+        ok = inventory.resolve_list_entry(
+            conn, None, entry_id, "purchased" if purchased else "removed"
+        )
+    if not ok:
+        raise HTTPException(status_code=404, detail="no such list entry")
+    return {"resolved": True}
 
 
 # ── dashboard reads ───────────────────────────────────────
