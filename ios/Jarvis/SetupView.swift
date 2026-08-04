@@ -131,9 +131,19 @@ enum VoiceSettings {
     static let autoSendKey = "jarvis.autoSend"
     static let pauseKey = "jarvis.pauseToSend"
 
-    /// A second of true silence is already a long gap in speech; shorter than
-    /// this and an ordinary mid-sentence breath sends half a reminder.
-    static let defaultPause: Double = 1.2
+    /// A second of true silence is already a long gap in speech, and shorter
+    /// than this an ordinary mid-sentence breath can send half a reminder.
+    ///
+    /// It starts at 0.8 anyway, because measuring the whole path made the cost
+    /// legible: this is the single largest fixed block in the round trip —
+    /// larger than the model call — and every millisecond of it is spent
+    /// waiting on someone who has already stopped talking. 0.8 is the shortest
+    /// setting that still reads as a pause rather than an interruption.
+    ///
+    /// Unlike the rest of the latency work this is a judgement about speech,
+    /// not a measurement, so it is the one number here to re-decide by ear.
+    /// The picker below changes it without a rebuild.
+    static let defaultPause: Double = 0.8
 
     static let choices: [(label: String, seconds: Double)] = [
         ("Quick 0.8s", 0.8),

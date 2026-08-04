@@ -194,7 +194,13 @@ final class Transcriber: ObservableObject {
         analyzer = nil
         module = nil
 
-        deactivateSession()
+        // Deliberately does *not* deactivate the session: the reply is about
+        // to play through it, and tearing it down here only to have `Speaker`
+        // rebuild it a moment later is a full route reconfiguration sitting on
+        // the critical path — the same cost `configureSession` avoids by using
+        // .playAndRecord instead of .record. `Speaker` releases the session
+        // when it has finished speaking; `abort` still releases it here,
+        // because in that path no reply is coming.
         return transcript
     }
 

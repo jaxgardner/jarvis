@@ -13,6 +13,7 @@ nothing and starts paying if the prompt grows.
 from datetime import datetime, timedelta
 
 import anthropic
+import httpx
 
 from app import config, timeutil, usage
 
@@ -405,16 +406,33 @@ _CLIENT: anthropic.Anthropic | None = None
 
 
 def _client() -> anthropic.Anthropic:
-    """One client for the process lifetime.
+    """One client for the process lifetime, holding one warm connection.
 
     Constructing a client per call throws away the HTTP connection pool, so
     every request pays a fresh TCP + TLS handshake to api.anthropic.com — pure
     overhead on a path with a two-second budget. The daemon is long-lived, so
     the pool should be too.
+
+    A single client is not enough on its own, though: httpx expires idle
+    connections after five seconds by default and the SDK does not override
+    it, so an assistant spoken to every few minutes re-handshakes on every
+    single request anyway. Measured from the Mini that is only about 15ms —
+    small, but it is pure waste and this is the one line that removes it.
+    `DefaultHttpxClient` rather than a bare `httpx.Client` so the SDK's own
+    timeout and retry defaults survive.
     """
     global _CLIENT
     if _CLIENT is None:
-        _CLIENT = anthropic.Anthropic(api_key=config.anthropic_api_key())
+        _CLIENT = anthropic.Anthropic(
+            api_key=config.anthropic_api_key(),
+            http_client=anthropic.DefaultHttpxClient(
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=300.0,
+                )
+            ),
+        )
     return _CLIENT
 
 

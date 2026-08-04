@@ -2,12 +2,17 @@ import SwiftUI
 
 /// Deep-path history.
 ///
-/// The list shows a truncated preview because job results are prose and most
-/// of it goes unread; the full text is one tap away on the detail view. A
-/// running job is a live thing — watching one finish is a real use case, so the
-/// list polls while anything is in flight and says so with a pulsing dot rather
-/// than a spinner that would imply the *list* is loading.
-struct JobsView: View {
+/// Called Reports rather than Jobs because that is what they are to the person
+/// reading them. "Job" is the server's word for a queue row and it belongs in
+/// the schema; on a tab bar it names the machinery instead of the thing you
+/// asked for. The API is untouched — this is `/jobs` all the way down.
+///
+/// The list shows a truncated preview because results are prose and most of it
+/// goes unread; the full text is one tap away on the detail view. A running
+/// report is a live thing — watching one finish is a real use case, so the list
+/// polls while anything is in flight and says so with a pulsing dot rather than
+/// a spinner that would imply the *list* is loading.
+struct ReportsView: View {
     @EnvironmentObject private var api: JarvisAPI
     @ObservedObject private var router = LaunchRouter.shared
 
@@ -23,11 +28,14 @@ struct JobsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                ScreenHeader(title: "Jobs", kicker: hasLiveJob ? "Deep path · live" : "Deep path")
+                ScreenHeader(
+                    title: "Reports",
+                    kicker: hasLiveJob ? "Deep path · working" : "Deep path"
+                )
                 content
             }
             .jarvisBackground()
-            .navigationDestination(for: Int.self) { JobDetailView(jobID: $0) }
+            .navigationDestination(for: Int.self) { ReportDetailView(jobID: $0) }
         }
         .task { await load() }
         // Running jobs finish while you're looking at them.
@@ -67,7 +75,7 @@ struct JobsView: View {
 
                 if jobs.isEmpty {
                     EmptyState(
-                        title: "No jobs yet",
+                        title: "No reports yet",
                         message: "Anything Jarvis escalates to the deep path lands here."
                     )
                     .plainRow()
@@ -77,7 +85,7 @@ struct JobsView: View {
                     Button {
                         path.append(job.id)
                     } label: {
-                        JobCard(job: job)
+                        ReportCard(job: job)
                     }
                     .buttonStyle(.plain)
                     .plainRow()
@@ -106,14 +114,18 @@ struct JobsView: View {
     }
 }
 
-private struct JobCard: View {
+private struct ReportCard: View {
     let job: JobsResponse.Job
 
     /// A failed job's error *is* its result as far as the list is concerned —
     /// "what happened" is the question either way.
+    ///
+    /// Run through the markdown summariser rather than shown raw: a result that
+    /// opens on a heading or a table would otherwise spend both of the card's
+    /// two lines on `## Findings` and a row of pipes.
     private var preview: String {
         if let failure = job.error, !failure.isEmpty, job.status == "failed" { return failure }
-        if let result = job.resultPreview, !result.isEmpty { return result }
+        if let result = job.resultPreview, !result.isEmpty { return Markdown.summary(of: result) }
         return job.status == "running" ? "Working…" : "Queued."
     }
 
@@ -177,12 +189,17 @@ enum JobStatus {
     }
 }
 
-struct JobDetailView: View {
+struct ReportDetailView: View {
     @EnvironmentObject private var api: JarvisAPI
+    @EnvironmentObject private var toasts: ToastCenter
     let jobID: Int
 
     @State private var job: JobDetail?
     @State private var error: String?
+    /// The escape hatch for a result the parser mis-reads. Per-screen and not
+    /// persisted: wanting to see the source of one report says nothing about
+    /// the next one.
+    @State private var showsRaw = false
 
     var body: some View {
         ScrollView {
@@ -194,17 +211,38 @@ struct JobDetailView: View {
                 if let job {
                     Pill(text: job.status, tint: JobStatus.tint(job.status))
 
-                    section("Asked", body: job.prompt, tint: Theme.text)
+                    section("Asked") {
+                        Text(job.prompt)
+                            .font(Theme.sans(14.5))
+                            .foregroundStyle(Theme.text)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                    }
 
                     if let result = job.result, !result.isEmpty {
-                        // Often markdown-ish, sometimes a table. Shown as-is
-                        // and selectable rather than rendered — a half-working
-                        // markdown pass would mangle more than it fixed.
-                        section("Result", body: result, tint: Theme.text2)
+                        section("Result", controls: { resultControls(for: result) }) {
+                            if showsRaw {
+                                Text(result)
+                                    .font(Theme.mono(12.5))
+                                    .foregroundStyle(Theme.text2)
+                                    .lineSpacing(2)
+                                    .textSelection(.enabled)
+                            } else {
+                                MarkdownText(result)
+                            }
+                        }
                     }
+
                     if let failure = job.error, !failure.isEmpty {
-                        section("Error", body: failure, tint: Theme.danger, mono: true)
+                        section("Error", tint: Theme.danger) {
+                            Text(failure)
+                                .font(Theme.mono(13))
+                                .foregroundStyle(Theme.danger)
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                        }
                     }
+
                     if job.sessionId != nil {
                         // Follow-ups resume this session, which is why "what
                         // about the second one" works across two utterances.
@@ -224,27 +262,43 @@ struct JobDetailView: View {
             .padding(20)
         }
         .jarvisBackground()
-        .navigationTitle("Job \(jobID)")
+        .navigationTitle("Report \(jobID)")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
 
-    private func section(
+    /// Raw is a toggle rather than a setting, and Copy exists because a report
+    /// is the one thing in this app you might want somewhere else.
+    @ViewBuilder
+    private func resultControls(for result: String) -> some View {
+        SectionButton(
+            symbol: showsRaw ? "textformat" : "chevron.left.forwardslash.chevron.right",
+            label: showsRaw ? "Rendered" : "Raw"
+        ) {
+            showsRaw.toggle()
+        }
+        SectionButton(symbol: "doc.on.doc", label: "Copy") {
+            UIPasteboard.general.string = result
+            toasts.show("Copied.")
+        }
+    }
+
+    private func section<Content: View, Controls: View>(
         _ title: String,
-        body: String,
-        tint: Color,
-        mono: Bool = false
+        tint: Color = Theme.text3,
+        @ViewBuilder controls: () -> Controls = { EmptyView() },
+        @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(Theme.mono(11))
-                .tracking(0.6)
-                .foregroundStyle(mono ? Theme.danger : Theme.text3)
-            Text(body)
-                .font(mono ? Theme.mono(13) : Theme.sans(14.5))
-                .foregroundStyle(tint)
-                .lineSpacing(3)
-                .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(title.uppercased())
+                    .font(Theme.mono(11))
+                    .tracking(0.6)
+                    .foregroundStyle(tint)
+                Spacer(minLength: 8)
+                controls()
+            }
+            content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -256,5 +310,29 @@ struct JobDetailView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// The small control that sits on a section label. Deliberately quiet — these
+/// are affordances you go looking for, not things the screen is offering.
+private struct SectionButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text3)
+                .frame(width: 26, height: 22)
+                .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Theme.border, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }

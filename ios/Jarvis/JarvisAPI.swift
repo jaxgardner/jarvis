@@ -370,6 +370,11 @@ final class JarvisAPI: ObservableObject {
     private let session: URLSession
     private let decoder: JSONDecoder
 
+    /// Its own session and delegate, because a streamed body has to be read as
+    /// it arrives rather than awaited whole. Held for the life of the app so
+    /// replies reuse one connection to the Mini.
+    private let audioStream = ChunkedAudioClient()
+
     private init() {
         host = UserDefaults.standard.string(forKey: "jarvis.host") ?? ""
         isEnrolled = Keychain.get(Self.tokenAccount) != nil
@@ -613,16 +618,12 @@ final class JarvisAPI: ObservableObject {
         return try decoder.decode(ReceiptResponse.self, from: data)
     }
 
-    /// Audio for a reply, in the Mini's local voice.
-    ///
-    /// Three seconds, deliberately short: this is racing `AVSpeechSynthesizer`,
-    /// which is sitting right there and costs nothing. Waiting longer than that
-    /// on a dead server buys silence where a worse voice would do.
+    /// Audio for a reply, in the Mini's local voice, streamed in clauses.
     ///
     /// Unlike `send`, this touches neither `isReachable` nor `isUnauthorized`.
     /// A voice that failed is not an enrollment problem and must not put the
     /// app into a re-enrol state over it.
-    func speech(for text: String) async throws -> Data {
+    private func speechRequest(for text: String) throws -> URLRequest {
         guard !host.isEmpty, let credential = deviceToken, !credential.isEmpty else {
             throw APIError.notConfigured
         }
@@ -636,14 +637,24 @@ final class JarvisAPI: ObservableObject {
         request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
-        request.timeoutInterval = 3
+        request.timeoutInterval = Self.speechTimeout(for: text)
+        return request
+    }
 
-        let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else {
-            throw APIError.server(status, "no voice")
-        }
-        return data
+    /// How long to wait, scaled to how much there is to say.
+    ///
+    /// This was a flat three seconds, chosen when `/speech` returned one WAV
+    /// and synthesis was assumed to be quick. Measured, a single sentence
+    /// takes about a second — so a three-sentence answer could cross the
+    /// deadline and drop to the Apple voice, silently, which is exactly the
+    /// failure the unconditional fallback makes invisible.
+    ///
+    /// On a streamed response `timeoutInterval` is the gap *between* packets
+    /// rather than the total, so this is the budget for one chunk. Generous is
+    /// cheap: the race against `AVSpeechSynthesizer` is decided by the first
+    /// chunk, which now arrives in about 300ms.
+    nonisolated static func speechTimeout(for text: String) -> TimeInterval {
+        min(15, max(4, 2 + Double(text.count) / 40))
     }
 
     /// Type a list of food instead of photographing a receipt.
@@ -762,5 +773,10 @@ final class JarvisAPI: ObservableObject {
 }
 
 extension JarvisAPI: SpeechSource {
-    func audio(for text: String) async throws -> Data { try await speech(for: text) }
+    func audioChunks(for text: String) -> AsyncThrowingStream<Data, Error> {
+        guard let request = try? speechRequest(for: text) else {
+            return AsyncThrowingStream { $0.finish(throwing: APIError.notConfigured) }
+        }
+        return audioStream.chunks(for: request)
+    }
 }

@@ -32,7 +32,7 @@ struct JarvisApp: App {
 /// treatment, the mono labels and the pending-proposal badge are all part of
 /// the design language, and the stock bar can carry none of them.
 enum JarvisTab: String, CaseIterable, Hashable {
-    case talk, agenda, pantry, activity, jobs, proposals, health
+    case talk, agenda, pantry, activity, reports, proposals, health
 
     var label: String {
         switch self {
@@ -40,20 +40,24 @@ enum JarvisTab: String, CaseIterable, Hashable {
         case .agenda: return "Agenda"
         case .pantry: return "Pantry"
         case .activity: return "Activity"
-        case .jobs: return "Jobs"
+        case .reports: return "Reports"
         case .proposals: return "Review"
         case .health: return "Health"
         }
     }
 
     /// The brief's SF Symbols, kept as-is where it named them.
+    ///
+    /// Reports is the exception: `gearshape.2` was drawn for the tab when it
+    /// was called Jobs and said "background machinery". What lands here is
+    /// written work you asked for, so it gets a document.
     var symbol: String {
         switch self {
         case .talk: return "mic.fill"
         case .agenda: return "calendar"
         case .pantry: return "refrigerator"
         case .activity: return "waveform"
-        case .jobs: return "gearshape.2"
+        case .reports: return "doc.text.magnifyingglass"
         case .proposals: return "tray.full"
         case .health: return "heart.text.square"
         }
@@ -84,7 +88,7 @@ struct RootView: View {
                 case .agenda: AgendaView()
                 case .pantry: PantryView()
                 case .activity: ActivityView()
-                case .jobs: JobsView()
+                case .reports: ReportsView()
                 case .proposals: ProposalsView(pendingCount: $pendingProposals)
                 case .health: HealthView()
                 }
@@ -102,10 +106,10 @@ struct RootView: View {
             }
         }
         .task { await refreshBadge() }
-        // A "Job finished" notification should land on the job, not on
+        // A "Job finished" notification should land on the report, not on
         // whichever tab happened to be showing.
         .onChange(of: router.pendingJobID) { _, id in
-            if id != nil { tab = .jobs }
+            if id != nil { tab = .reports }
         }
     }
 
