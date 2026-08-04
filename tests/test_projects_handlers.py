@@ -222,6 +222,45 @@ def test_asking_what_you_are_working_on_lists_the_active_projects(conn, monkeypa
     assert "PROJECT: kitchen remodel" in seen["context"]
 
 
+def test_a_project_question_is_not_drowned_out_by_unrelated_notes(conn, monkeypatch):
+    """Found on the real database: asked "what am I working on" with a project
+    open, it answered about an unrelated note on the GitHub CLI. The generic
+    note search matches the question's own words — "working" hits any note
+    containing it — and those lines outcompeted the single PROJECT line."""
+    from app import handlers
+    from projects import store
+
+    store.create(conn, None, "back garden fence")
+    conn.execute(
+        "INSERT INTO notes (body) VALUES ('still working on fixing the GitHub CLI')"
+    )
+
+    seen: dict = {}
+    capture(monkeypatch, seen)
+
+    handlers.query(
+        conn, None, {"question": "what am I working on", "kind": "project"}, "America/Denver"
+    )
+
+    assert "PROJECT: back garden fence" in seen["context"]
+    assert "GitHub CLI" not in seen["context"], seen["context"]
+
+
+def test_no_projects_at_all_says_so_rather_than_guessing(conn, monkeypatch):
+    from app import handlers
+
+    conn.execute("INSERT INTO notes (body) VALUES ('still working on the GitHub CLI')")
+    seen: dict = {}
+    capture(monkeypatch, seen)
+
+    reply = handlers.query(
+        conn, None, {"question": "what am I working on", "kind": "project"}, "America/Denver"
+    )
+
+    assert reply == "You don't have any projects yet."
+    assert "context" not in seen, "should not have spent a model call"
+
+
 def test_an_invented_project_id_does_not_invent_context(conn, monkeypatch):
     from app import handlers
     from projects import store
