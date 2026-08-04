@@ -713,16 +713,28 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     if report:
         lines.append(report)
 
-    # A project leads the context for the same reason a named report does:
-    # whatever else the question turns up, this is what it is about. There is
-    # no templated shortcut — "where am I on this" is a judgement about a pile
-    # of notes, which is exactly what the model hop is for.
+    # A project question is answered from the project and nothing else, and it
+    # returns here rather than falling through.
+    #
+    # It used to fall through and pick up the generic note and mail search
+    # below. That search matches on the question's own words — "what am I
+    # working on" hits any note containing "working" — and those lines
+    # outcompeted the one PROJECT line they were supposed to be supporting:
+    # asked with a real project open, it answered about an unrelated note on
+    # the GitHub CLI. Anything the question is actually about is already in
+    # `context_lines`.
+    #
+    # There is no templated shortcut. "Where am I on this" is a judgement about
+    # a pile of notes, which is exactly what the model hop is for.
     if kind == "project":
         from projects import store as projects_store
 
         lines.extend(
             projects_store.context_lines(conn, _project_ref(conn, args), tz_name)
         )
+        if not lines:
+            return "You don't have any projects yet."
+        return router.answer(args["question"], "\n".join(lines), tz_name)
 
     if brief:
         lines.append(brief)
