@@ -34,6 +34,7 @@ from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
 from gratitude import entries as gratitude_entries
 from pantry import images, inventory, receipts
+from projects import store as projects_store
 from speech import synth
 
 
@@ -265,9 +266,10 @@ def _say(req: SayRequest) -> dict:
         # records that /say's four SQLite transactions are inside the noise.
         # Making it five to fetch ten rows would not be.
         reports = handlers.recent_reports(conn)
+        active_projects = projects_store.active(conn)
 
     try:
-        tool, args = router.route(req.text, tz_name, reports)
+        tool, args = router.route(req.text, tz_name, reports, active_projects)
     except Exception as exc:
         _finish(utterance_id, None, None, "Sorry — something went wrong.", started)
         raise HTTPException(status_code=502, detail=f"router failed: {exc}") from exc
@@ -290,8 +292,8 @@ def _say(req: SayRequest) -> dict:
             else:
                 job_id = int(
                     conn.execute(
-                        "INSERT INTO jobs (utterance_id, prompt) VALUES (?,?)",
-                        (utterance_id, task),
+                        "INSERT INTO jobs (utterance_id, prompt, project_id) VALUES (?,?,?)",
+                        (utterance_id, task, handlers._project_ref(conn, args)),
                     ).lastrowid
                 )
         reply = {
@@ -307,6 +309,31 @@ def _say(req: SayRequest) -> dict:
             "utterance_id": utterance_id,
             "latency_ms": latency,
         }
+
+    if tool == "start_project":
+        with transaction() as conn:
+            try:
+                project_id, job_id, reply = handlers.start_project(conn, utterance_id, args)
+            except ValueError as exc:
+                _finish(utterance_id, None, tool, "Sorry — something went wrong.", started)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Deep only when research came with it. A project created and nothing
+        # queued is a fast-path write like any other, and reporting it as deep
+        # would have the phone poll a job that does not exist.
+        route = "deep" if job_id is not None else "fast"
+        latency = _finish(utterance_id, route, tool, reply, started)
+        synth.prefetch(reply)
+        response = {
+            "reply": reply,
+            "route": route,
+            "project_id": project_id,
+            "utterance_id": utterance_id,
+            "latency_ms": latency,
+        }
+        if job_id is not None:
+            response["job_id"] = job_id
+        return response
 
     handler = handlers.FAST_HANDLERS.get(tool)
     if handler is None:

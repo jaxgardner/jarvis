@@ -24,6 +24,25 @@ def _lookup_or_create(
     return mutations.insert(conn, utterance_id, table, {"name": name})
 
 
+def _project_ref(conn: sqlite3.Connection, args: dict) -> int | None:
+    """The project this write belongs to, or None.
+
+    An id the router invented rather than read out of PROJECTS files the row
+    nowhere. Keeping the note and dropping the association is the right half to
+    lose: the thought is what you said, and a note filed under a project that
+    does not exist is a note you will never find again.
+    """
+    raw = args.get("project_id")
+    if raw is None:
+        return None
+    try:
+        project_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    row = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return int(row["id"]) if row else None
+
+
 # ── writes ────────────────────────────────────────────────
 
 
@@ -40,6 +59,9 @@ def add_event(conn, utterance_id: int, args: dict, tz_name: str) -> str:
         values["ends_at"] = timeutil.to_utc_iso(args["ends_at"])
     if args.get("location"):
         values["location"] = args["location"].strip()
+    project_id = _project_ref(conn, args)
+    if project_id is not None:
+        values["project_id"] = project_id
 
     mutations.insert(conn, utterance_id, "events", values)
     when = timeutil.speak_datetime(starts_at, tz_name, all_day)
@@ -52,6 +74,9 @@ def add_reminder(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     values = {"body": args["body"].strip(), "fire_at": fire_at}
     if args.get("recurrence"):
         values["recurrence"] = args["recurrence"].strip()
+    project_id = _project_ref(conn, args)
+    if project_id is not None:
+        values["project_id"] = project_id
 
     mutations.insert(conn, utterance_id, "reminders", values)
     when = timeutil.speak_datetime(fire_at, tz_name)
@@ -63,17 +88,65 @@ def add_note(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     values = {"body": args["body"].strip()}
     if args.get("tags"):
         values["tags"] = json.dumps(args["tags"])
-    if args.get("project"):
-        values["project_id"] = _lookup_or_create(
-            conn, utterance_id, "projects", args["project"]
-        )
+    # `project` used to be a free-text name that created the project if it was
+    # new. It is an id from PROJECTS now: voice is lossy, and a misheard name
+    # spawned a ghost project that nothing could merge away.
+    project_id = _project_ref(conn, args)
+    if project_id is not None:
+        values["project_id"] = project_id
     if args.get("person"):
         values["person_id"] = _lookup_or_create(
             conn, utterance_id, "people", args["person"]
         )
 
     mutations.insert(conn, utterance_id, "notes", values)
-    return "Noted."
+    if project_id is None:
+        return "Noted."
+    name = conn.execute(
+        "SELECT name FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()["name"]
+    return f"Noted, under {name}."
+
+
+def start_project(conn, utterance_id: int, args: dict) -> tuple[int, int | None, str]:
+    """Create a project, and start research under it if that was asked for.
+
+    Not in FAST_HANDLERS: it may enqueue a job, so the response shape is
+    /say's to decide, exactly as it is for escalate.
+
+    Starting a project that already exists is not an error and not a second
+    row. "Start a project on the lettuce" said twice is one project — voice is
+    lossy enough without a near-duplicate for every repetition.
+    """
+    from projects import store
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        raise ValueError("start_project needs a name")
+
+    existing = store.find_by_name(conn, name)
+    if existing is None:
+        project_id = store.create(conn, utterance_id, name, args.get("description"))
+    else:
+        project_id = int(existing["id"])
+        name = existing["name"]
+
+    task = (args.get("research_task") or "").strip()
+    job_id = None
+    if task:
+        job_id = int(
+            conn.execute(
+                "INSERT INTO jobs (utterance_id, prompt, project_id) VALUES (?,?,?)",
+                (utterance_id, task, project_id),
+            ).lastrowid
+        )
+
+    if job_id is not None:
+        opening = "Started" if existing is None else "Picking up"
+        return project_id, job_id, f"{opening} the {name} project — I'll dig into it and ping you."
+    if existing is not None:
+        return project_id, None, f"You already have a {name} project."
+    return project_id, None, f"Started the {name} project."
 
 
 # Spoken counts, so the reply reads as speech rather than as a scoreboard.
@@ -639,6 +712,18 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     report = _report_line(conn, args.get("job_id"))
     if report:
         lines.append(report)
+
+    # A project leads the context for the same reason a named report does:
+    # whatever else the question turns up, this is what it is about. There is
+    # no templated shortcut — "where am I on this" is a judgement about a pile
+    # of notes, which is exactly what the model hop is for.
+    if kind == "project":
+        from projects import store as projects_store
+
+        lines.extend(
+            projects_store.context_lines(conn, _project_ref(conn, args), tz_name)
+        )
+
     if brief:
         lines.append(brief)
     if kind == "brief":
