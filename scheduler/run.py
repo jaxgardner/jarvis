@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from app import config, notify, timeutil
 from app.db import transaction
+from gratitude import nudge
 from pantry import expiry
 
 # A reminder that came due while the machine was down is worth delivering late
@@ -171,6 +172,12 @@ def tick(tz_name: str | None = None) -> dict:
         expiry.sweep(tz_name)
     except Exception as exc:  # noqa: BLE001
         print(f"pantry expiry sweep failed: {exc}", file=sys.stderr)
+
+    # Same guard, same reason: a gratitude bug must not cost you a reminder.
+    try:
+        nudge.sweep(tz_name)
+    except Exception as exc:  # noqa: BLE001
+        print(f"gratitude sweep failed: {exc}", file=sys.stderr)
 
     _selfcheck(tz_name)
     return {"due": len(due), "fired": fired, "missed": missed, "failed": failed}

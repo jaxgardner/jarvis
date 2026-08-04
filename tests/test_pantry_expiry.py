@@ -224,7 +224,9 @@ def test_the_scheduler_imports_no_model_code():
 
     forbidden = {"anthropic", "app.router", "pantry.extract"}
     for path in [REPO_ROOT / "scheduler/run.py", REPO_ROOT / "pantry/expiry.py",
-                 REPO_ROOT / "pantry/inventory.py"]:
+                 REPO_ROOT / "pantry/inventory.py",
+                 REPO_ROOT / "gratitude/nudge.py",
+                 REPO_ROOT / "gratitude/entries.py"]:
         tree = ast.parse(Path(path).read_text())
         for node in ast.walk(tree):
             names = []

@@ -159,3 +159,42 @@ def test_the_message_is_safe_to_speak(db):
         body = nudge.message(count)
         assert "\n" not in body
         assert not any(ch in body for ch in "*_#`[]")
+
+
+def test_the_scheduler_tick_runs_the_sweep(db, pushes, monkeypatch):
+    from gratitude import nudge
+    from scheduler import run
+
+    called = []
+    monkeypatch.setattr(
+        nudge,
+        "sweep",
+        lambda tz_name=None: called.append(tz_name) or {"logged": 0, "pushed": False},
+    )
+    run.tick("America/Denver")
+
+    assert called == ["America/Denver"]
+
+
+def test_a_broken_sweep_does_not_take_out_the_reminder_tick(db, pushes, monkeypatch):
+    """Design principle 3. Reminders must fire even when everything else is
+    broken, and gratitude is very much everything else."""
+    from app.db import transaction
+    from gratitude import nudge
+    from scheduler import run
+
+    def boom(tz_name=None):
+        raise RuntimeError("gratitude is on fire")
+
+    monkeypatch.setattr(nudge, "sweep", boom)
+
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO reminders (body, fire_at)
+                 VALUES ('take the bins out', strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 minute'))"""
+        )
+
+    result = run.tick("America/Denver")
+
+    assert len(result["fired"]) == 1
+    assert any("bins" in body for body, _ in pushes)
