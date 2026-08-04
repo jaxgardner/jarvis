@@ -43,7 +43,8 @@ See `migrations/001_init.sql` — it is the authoritative copy, applied in full
 up front. Domain tables: `events`, `reminders`, `people`, `projects`,
 `project_links`, `notes`. `events`, `reminders` and `jobs` each carry a
 nullable `project_id` (migration 014).
-Operational: `utterances`, `mutations`, `jobs`. Search: `notes_fts`
+Operational: `utterances`, `mutations`, `jobs` — `utterances` carries
+`turn_ms` and `timings` (migration 016), both nullable permanently. Search: `notes_fts`
 (external-content FTS5 + three sync triggers). Ingestion:
 `sync_state`, `proposals`, `email_messages` + `email_fts`.
 
@@ -557,7 +558,8 @@ engine — no markdown, no lists, no emoji.
 | `POST /undo` | Reverse the most recent non-undone mutation |
 | `GET /jobs/{id}` | Poll deep-path status |
 | `GET /health` | Liveness for launchd and uptime checks |
-| `GET /metrics` | p50/p95 latency by route, last 24h |
+| `GET /metrics` | p50/p95 latency by route, plus the turn, last 24h |
+| `POST /turns` | The phone reports what a turn cost, end of speech to first sound |
 | `POST /devices` | Register a device (or refresh its APNs token) |
 | `GET /devices`, `DELETE /devices/{id}` | List, and revoke a lost one |
 | `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
@@ -605,7 +607,7 @@ the tool choice; there is no separate classifier model.
 | `start_project` | `name`, `description?`, `research_task?` — deep when research came with it |
 | `log_gratitude` | `items[]` |
 | `query` | `question`, `kind`, `window_days?`, `job_id?`, `project_id?` |
-| `answer` | `reply` — spoken verbatim. The one tool that talks to the user |
+| `answer` | `reply` — spoken verbatim, from TODAY or CONTEXT. The one tool that talks to the user |
 | `undo_last` | — |
 | `escalate` | `restated_task`, `job_id?`, `project_id?` — routes to the deep path |
 
@@ -717,6 +719,75 @@ given.
   between a 1.4s answer and a 3s one, which is what the `answer` tool exists
   to remove. Beware measuring any of this with n=3; the spread on a single
   call runs 600–2400ms.
+- **`latency_ms` is not the number the user feels, and optimizing it is how a
+  system gets faster on paper and no faster in the room.** It times `/say`.
+  The turn is the endpointer, then `/say`, then synthesis, and the two ends
+  are roughly half of it:
+
+  | | |
+  | :-- | :-- |
+  | Endpointer, waiting on someone who stopped talking | 800ms → **450ms** |
+  | `/say`, which is all `latency_ms` could ever see | ~1410ms |
+  | Synthesis to first sound, after `/say` returns | ~640ms |
+  | **The turn** | **~3000ms** |
+
+  `utterances.turn_ms` is that whole number, measured on the phone from the
+  endpointer firing to the first audio buffer being scheduled, and posted
+  back by a fire-and-forget `POST /turns` **after playback has started** so
+  it cannot sit on the path it measures. `/metrics` reports it above the
+  route blocks and HealthView shows it above `/say`. It is nullable
+  permanently: a Shortcut has no microphone, and folding its silence in as a
+  zero would report a headline number nobody experienced.
+
+  `Speaker.onFirstAudio` is what stops the clock, not `speak()` returning —
+  `speak` runs until the last chunk has arrived, which on a long reply is
+  most of a second after the first syllable.
+
+  The `timings` column exists and is unwritten. `turn_ms` is the number the
+  goal is stated in, and a server-side hop breakdown only earns its keep once
+  a turn is known to be slow for a reason `turn_ms` cannot explain. The
+  `OSSignposter` intervals in `TalkView` are the cheaper first answer.
+- **Pre-retrieval: `CONTEXT` is the one question-derived block in the router
+  prompt, and it is safe for a different reason than `TODAY` is.** `TODAY` is
+  built before the utterance is read, so nothing the user says can put a
+  wrong row in it. `CONTEXT` is `handlers.context_block` — the same
+  `_search_notes` and `search_email` that `query` uses, run *before* the
+  router call instead of after it — so it is derived from the user's words
+  and can absolutely surface the wrong note. What makes it safe is that
+  `query` stays reachable: the block is labelled candidates rather than
+  answers, and a miss degrades to the two-call path that already existed.
+  The worst case is the current case.
+
+  Measured, answering out of `CONTEXT` costs **~800ms against ~1560ms**
+  through `query` — one call against two, which is the ~660ms floor and
+  nothing else.
+
+  Two things this cost, both worth not rediscovering:
+
+  - **The tool descriptions had to be reconciled, not just the system
+    prompt.** `answer` read "If answering needs a note, an email, a project
+    or an older report, use query instead", which is flatly incompatible with
+    handing it notes. Descriptions are the strongest signal the router has
+    and no amount of system-prompt wording outvotes them — the first version
+    of this feature went on choosing `query` with the answer already in front
+    of it.
+  - **The win is real and partial, and it is a distribution.** "What did I
+    say about the fence" answers in one call 7 times in 8. "What did I say
+    about Sarah" answers in none of 8: a person-subject recall stays on
+    `query`, which has a `kind='recall'` path tuned for exactly that shape.
+    Both give the right spoken answer, so this is a latency rate rather than
+    a correctness question, and `/metrics` on real traffic is what should
+    settle whether to push it further. **Do not assert a live router's choice
+    once** — `test_context_answers_in_one_call` did, passed, and failed on
+    the next full-suite run.
+- **The endpointer is 0.45s and it was chosen by ear, not measured.** It is
+  the largest single fixed block in the turn and every millisecond is spent
+  waiting on someone who has already stopped talking, which is what makes it
+  worth cutting; `rearm()` is what makes it cheap to be wrong, since a
+  premature fire resumes listening rather than truncating the utterance. It
+  is `VoiceSettings.defaultPause` with a picker beside it, so re-deciding
+  costs no rebuild — and it is the one number in this section to re-decide
+  the same way it was decided.
 - **The Claude Code subscription cannot serve the fast path.** Measured
   `claude -p --model haiku` at 1.88 / 2.12 / 1.97s for a trivial prompt — that
   is startup alone, against a 2s end-to-end budget. `ANTHROPIC_API_KEY` is a
