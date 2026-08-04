@@ -26,21 +26,23 @@ import uuid
 from pathlib import Path
 
 from app import notify, reports, timeutil
-from app.config import REPO_ROOT
-from app.db import transaction
+from app.config import REPO_ROOT, WORK_DIR
+from app.db import connect, transaction
 
 TIMEOUT_SECONDS = 300  # 5 minutes, per the design doc's starting point
 MAX_ATTEMPTS = 2
 
 MCP_CONFIG = REPO_ROOT / "mcp.json"
 
-# Where jobs run. Deliberately NOT the repo: with full tool access the agent
-# has a shell, and the repo root contains .env — the Anthropic key, the ntfy
-# topic, and the Claude token, all plaintext because FileVault option A rules
-# out the keychain. Running elsewhere means a prompt injection from a fetched
-# page finds a scratch directory rather than credentials. The repo is still
-# readable via --add-dir.
-WORK_DIR = Path.home() / "Library" / "Application Support" / "jarvis" / "work"
+# Where jobs run is `app.config.WORK_DIR`, imported above. Deliberately NOT the
+# repo: with full tool access the agent has a shell, and the repo root contains
+# .env — the Anthropic key, the ntfy topic, and the Claude token, all plaintext
+# because FileVault option A rules out the keychain. Running elsewhere means a
+# prompt injection from a fetched page finds a scratch directory rather than
+# credentials. The repo is still readable via --add-dir.
+#
+# It moved to config so `projects.workspace` can put a project's own directory
+# underneath it without importing this module, which imports half the system.
 
 # Tool allowlist for the deep path. None = no --allowedTools flag, so the agent
 # gets the full default tool set (Bash included), with --permission-mode auto
