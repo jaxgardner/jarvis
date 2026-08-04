@@ -100,9 +100,13 @@ TOOLS: list[dict] = [
             "they name something they are grateful for, thankful for, or "
             "glad about: 'I'm grateful for the sun and Emma calling', "
             "'thankful my sister rang', 'today I was glad about the quiet'. "
-            "Each thing they name is its own item. This is not add_note — "
-            "gratitude is what the nightly prompt asks for and it has its own "
-            "log; a note is any other fact worth keeping."
+            "Each thing they name is its own item.\n"
+            "The user must actually SAY they are grateful, thankful or glad. "
+            "A sentence that merely reports something pleasant — 'my sister "
+            "called', 'the meeting went well' — is add_note, not this. And an "
+            "instruction to note or remember something is ALWAYS add_note, "
+            "however nice the thing is: 'note that my sister called' is a "
+            "note even though 'I'm thankful my sister called' is a gratitude."
         ),
         "input_schema": {
             "type": "object",

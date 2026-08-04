@@ -170,3 +170,22 @@ def test_ambiguous_relative_time_resolves_to_the_future(client):
     local = timeutil.to_local(fire_at, config.DEFAULT_TZ)
     assert local > timeutil.now(config.DEFAULT_TZ), "resolved into the past"
     assert local.strftime("%A") == "Friday", f"landed on {local.strftime('%A')}"
+
+
+def test_gratitude_is_not_a_note(client):
+    """The one routing decision this feature can plausibly get wrong.
+
+    "I'm grateful my sister called" and "note that my sister called" are one
+    word apart, and the router has no other signal. Mocking this would prove
+    nothing — the question is whether Haiku can tell, so it runs live.
+    """
+    r = say(client, "I'm grateful for the sun, Emma calling, and the deadline moving")
+    assert intent_of(r["utterance_id"]) == "log_gratitude"
+    assert "three" in r["reply"].lower()
+
+    r = say(client, "I'm thankful my sister called today")
+    assert intent_of(r["utterance_id"]) == "log_gratitude"
+
+    # The other side of the line, and the one that would break silently.
+    r = say(client, "note that my sister called today")
+    assert intent_of(r["utterance_id"]) == "add_note"
