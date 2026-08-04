@@ -768,6 +768,25 @@ def pending_proposals(conn, limit: int, tz_name: str) -> list[dict]:
 # un-send an answer to one of its questions.
 
 
+def recent_reports(conn, limit: int = 10) -> list[dict]:
+    """The reports the router is shown, newest first.
+
+    Finished only: a queued or running job cannot be resumed and has nothing
+    to say yet. Ten is a guess, and it is the number that decides what is
+    reachable by voice — everything older is still on the Reports screen with
+    a reply box.
+    """
+    return [
+        dict(r)
+        for r in conn.execute(
+            """SELECT id, prompt FROM jobs
+                 WHERE status IN ('done','failed')
+                 ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    ]
+
+
 def reply_to_job(conn, job_id: int, text: str) -> str:
     """Queue `text` as the next input to an already-finished job.
 

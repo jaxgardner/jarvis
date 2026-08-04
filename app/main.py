@@ -255,9 +255,13 @@ def _say(req: SayRequest) -> dict:
                 (req.text, req.client),
             ).lastrowid
         )
+        # Same transaction as the insert: the router needs these, and CLAUDE.md
+        # records that /say's four SQLite transactions are inside the noise.
+        # Making it five to fetch ten rows would not be.
+        reports = handlers.recent_reports(conn)
 
     try:
-        tool, args = router.route(req.text, tz_name)
+        tool, args = router.route(req.text, tz_name, reports)
     except Exception as exc:
         _finish(utterance_id, None, None, "Sorry — something went wrong.", started)
         raise HTTPException(status_code=502, detail=f"router failed: {exc}") from exc

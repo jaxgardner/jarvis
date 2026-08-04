@@ -326,7 +326,7 @@ Today is: {weekday}
 
 CALENDAR — copy dates from this table. Do not calculate them yourself.
 {calendar}
-
+{reports}
 Resolving times is the most important thing you do:
 - Every time you emit MUST be absolute ISO 8601 with an offset. Never a \
 relative phrase, never a bare date for something that has a time.
@@ -392,13 +392,41 @@ def calendar_table(local: datetime) -> str:
     return "\n".join(lines)
 
 
-def system_prompt(tz_name: str) -> str:
+# Sixty characters is enough to tell two reports apart and short enough that
+# ten rows stay under about 200 tokens — which keeps the whole prompt under
+# Haiku's 4096-token minimum cacheable prefix, so the "caching does not fire
+# here" note in CLAUDE.md stays true.
+_REPORT_PROMPT_CHARS = 60
+
+
+def reports_table(reports) -> str:
+    """The REPORTS block body. Empty string when there is nothing to list."""
+    lines = []
+    for report in reports:
+        ask = " ".join(str(report["prompt"]).split())
+        if len(ask) > _REPORT_PROMPT_CHARS:
+            ask = ask[: _REPORT_PROMPT_CHARS - 1].rstrip() + "…"
+        lines.append(f"  {report['id']:<5} {ask}")
+    return "\n".join(lines)
+
+
+def system_prompt(tz_name: str, reports=()) -> str:
     local = timeutil.now(tz_name)
+    table = reports_table(reports)
+    # Omitted entirely rather than rendered empty — an empty table invites the
+    # model to invent an id.
+    block = (
+        "\nREPORTS — the user's recent deep reports. Refer to one by its id.\n"
+        f"{table}\n"
+        if table
+        else ""
+    )
     return _SYSTEM.format(
         now_iso=local.isoformat(timespec="seconds"),
         tz_name=tz_name,
         weekday=local.strftime("%A, %B %-d, %Y"),
         calendar=calendar_table(local),
+        reports=block,
     )
 
 
@@ -436,12 +464,17 @@ def _client() -> anthropic.Anthropic:
     return _CLIENT
 
 
-def route(text: str, tz_name: str) -> tuple[str, dict]:
-    """Classify one utterance. Returns (tool_name, tool_input)."""
+def route(text: str, tz_name: str, reports=()) -> tuple[str, dict]:
+    """Classify one utterance. Returns (tool_name, tool_input).
+
+    `reports` is passed in rather than read here: this module makes model
+    calls and formats prompts, and giving it a database connection would
+    make it impossible to test either without one.
+    """
     response = _client().messages.create(
         model=MODEL,
         max_tokens=1024,
-        system=system_prompt(tz_name),
+        system=system_prompt(tz_name, reports),
         tools=TOOLS,
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": text}],

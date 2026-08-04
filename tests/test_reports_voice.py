@@ -229,3 +229,76 @@ def test_a_failing_job_is_never_summarized(worker_db, db, monkeypatch):
     )
 
     assert called == []
+
+
+# ── the prompt block ──────────────────────────────────────
+
+
+def test_recent_reports_are_newest_first(db):
+    from app import handlers
+    from app.db import transaction
+
+    make_job(db, prompt="older")
+    make_job(db, prompt="newer")
+
+    with transaction() as conn:
+        listed = handlers.recent_reports(conn)
+
+    assert [r["prompt"] for r in listed] == ["newer", "older"]
+
+
+def test_recent_reports_excludes_unfinished_work(db):
+    """A queued or running report cannot be resumed and has nothing to say."""
+    from app import handlers
+    from app.db import transaction
+
+    make_job(db, prompt="running one", status="running")
+    make_job(db, prompt="done one")
+
+    with transaction() as conn:
+        assert [r["prompt"] for r in handlers.recent_reports(conn)] == ["done one"]
+
+
+def test_recent_reports_caps_at_ten(db):
+    from app import handlers
+    from app.db import transaction
+
+    for n in range(12):
+        make_job(db, prompt=f"report {n}")
+
+    with transaction() as conn:
+        assert len(handlers.recent_reports(conn)) == 10
+
+
+def test_the_prompt_lists_reports_by_id():
+    from app import router
+
+    prompt = router.system_prompt(
+        "America/Denver",
+        [{"id": 27, "prompt": "Compare the three vendors"}],
+    )
+
+    assert "REPORTS" in prompt
+    assert "27" in prompt
+    assert "Compare the three vendors" in prompt
+
+
+def test_the_prompt_truncates_a_long_ask():
+    from app import router
+
+    table = router.reports_table([{"id": 3, "prompt": "x" * 200}])
+    assert len(table.splitlines()[0]) < 80
+
+
+def test_the_block_is_omitted_when_there_are_no_reports():
+    """A fresh install should not spend tokens being told about nothing."""
+    from app import router
+
+    assert "REPORTS" not in router.system_prompt("America/Denver", [])
+
+
+def test_the_calendar_block_still_survives():
+    """Regression: the reports block is inserted into the same template."""
+    from app import router
+
+    assert "CALENDAR" in router.system_prompt("America/Denver", [])
