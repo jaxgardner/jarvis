@@ -608,25 +608,39 @@ Deterministic, and it saves a round trip.
   so the agent just has no tools and the job *succeeds*, answering that it has
   no way to search your mail. Covered by
   `test_mcp_server_starts_from_outside_the_repo`.
-- **Prompt caching does not fire here, and the reason is structural rather
-  than a matter of size.** The cache prefix is ordered tools, then system,
-  then messages — and the system prompt carries the current datetime in its
-  third line, so everything from there on differs on every single call. **Only
-  the TOOLS block is ever cacheable, however large the prompt grows.**
+- **Prompt caching does not fire here, and two separate things have to be true
+  before it could.** The cache prefix is ordered tools, then system, then
+  messages — and the system prompt carries the current datetime in its third
+  line, so everything from there on differs on every call. **Only the TOOLS
+  block is ever cacheable, however large the prompt grows.** That is the
+  structural half, and it is why the whole-prompt size is the wrong number to
+  reason from.
 
-  This is worth stating plainly because the obvious number misleads. Measured
-  with `count_tokens` after projects landed: the whole prompt is **4513**
-  tokens, comfortably past Haiku 4.5's 4096-token minimum — which reads as
-  "caching fires now" and does not. The tools alone are **3677**, and that is
-  the number that decides. (Before projects the whole prompt was 3767 and the
-  old note here reasoned from that figure, which was the wrong one even then.)
+  The second half is that the tools are still too small, and this is where the
+  published number misleads. Measured: the tools alone are **4199** tokens
+  against Haiku 4.5's documented **4096** floor — 103 over, which reads like
+  caching should fire. **Probed directly, it does not**: two identical
+  requests both report `cache_creation_input_tokens` and
+  `cache_read_input_tokens` of 0. The same probe with the tools padded to 7240
+  tokens caches 6912 of them on the first call and reads them back on the
+  second. So the cache measures a smaller prefix than `count_tokens` reports
+  for the request, and a hundred tokens of headroom is not enough.
 
-  Moving the datetime block to the *end* of the system prompt would make the
-  system half cacheable too. It has not been done: the upside is only the
-  prefill share of a ~900ms call. `tests/test_router_prompt.py` asserts the
-  invariant rather than either number — either the prefix is under the floor
-  and `cache_control` is absent, or it is over and `cache_control` is set — so
-  it keeps telling the truth as the prompt changes.
+  **A `cache_control` marker on a prefix below the minimum is a silent
+  no-op** — no error, both counters zero, and it reads as a working
+  optimization forever. `tests/test_router_prompt.py` therefore asserts the
+  *behaviour*: declare `cache_control` and it must produce a real cache read.
+  It skips when nothing is declared, so the two probe requests are only spent
+  by whoever opts in.
+
+  If it ever does become worth turning on, the economics were measured too:
+  the median gap between real utterances is 340s, so a 5-minute TTL would read
+  the cache 48% of the time (0.69x of uncached, after the 1.25x writes) and a
+  1-hour TTL 73% (0.60x, after 2x writes). Both beat not caching; neither is
+  dramatic. Moving the datetime to the *end* of the system prompt would make
+  the system half cacheable and push the prefix well clear of the floor — that
+  is the change to make first, and it has not been done because the upside is
+  only the prefill share of a ~900ms call.
 - **The Anthropic client sets its own httpx keepalive.** httpx expires idle
   connections after 5s by default and the SDK does not override it, so an
   assistant spoken to every few minutes would re-handshake on every request.
