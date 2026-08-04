@@ -764,6 +764,118 @@ def gratitude(days: int = 30, tz: str | None = None) -> dict:
         conn.close()
 
 
+# ── projects ──────────────────────────────────────────────
+# A project is a named space collecting one thing's notes, reports, dated
+# items, links and files. Nothing here computes a status: the screen shows the
+# rows, and "where am I on this" is answered live through query(kind='project').
+
+
+class LinkCreate(BaseModel):
+    url: str = Field(min_length=1)
+    title: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("url cannot be blank")
+        return value
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _known(cls, value: str | None) -> str | None:
+        if value is not None and value not in projects_store.STATUSES:
+            raise ValueError(f"status must be one of {projects_store.STATUSES}")
+        return value
+
+
+@app.get("/projects", dependencies=[Depends(require_token)])
+def list_projects() -> dict:
+    conn = connect()
+    try:
+        return {"projects": projects_store.listing(conn)}
+    finally:
+        conn.close()
+
+
+def _project_detail(project_id: int, tz: str | None = None) -> dict:
+    conn = connect()
+    try:
+        detail = projects_store.detail(conn, project_id, tz or config.DEFAULT_TZ)
+    finally:
+        conn.close()
+    if detail is None:
+        raise HTTPException(status_code=404, detail="no such project")
+    return detail
+
+
+@app.get("/projects/{project_id}", dependencies=[Depends(require_token)])
+def project(project_id: int, tz: str | None = None) -> dict:
+    return _project_detail(project_id, tz)
+
+
+@app.post("/projects/{project_id}/links", dependencies=[Depends(require_token)])
+def add_project_link(project_id: int, req: LinkCreate, tz: str | None = None) -> dict:
+    """Paste a URL onto a project.
+
+    Through the mutations helper: a human tapped this, and human actions are
+    what /undo exists to reverse. A second paste of the same URL is not an
+    error and not a second row.
+    """
+    with transaction() as conn:
+        if projects_store.get(conn, project_id) is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        projects_store.add_link(conn, None, project_id, req.url, req.title)
+    return _project_detail(project_id, tz)
+
+
+@app.patch("/projects/{project_id}", dependencies=[Depends(require_token)])
+def edit_project(project_id: int, req: ProjectPatch, tz: str | None = None) -> dict:
+    """Rename, or move it between active, paused and done.
+
+    The slug is deliberately untouched by a rename: the working directory is
+    named from it and reports already written quote paths inside it.
+    """
+    with transaction() as conn:
+        if projects_store.get(conn, project_id) is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        if req.name and req.name.strip():
+            projects_store.rename(conn, project_id, req.name)
+        if req.status:
+            projects_store.set_status(conn, project_id, req.status)
+    return _project_detail(project_id, tz)
+
+
+@app.get("/projects/{project_id}/files/{name}", dependencies=[Depends(require_token)])
+def project_file(project_id: int, name: str) -> dict:
+    """One artifact the agent wrote.
+
+    `workspace.read_text` resolves the name against the project directory and
+    refuses anything that escapes it or is not text. Both come back as 404
+    rather than 400: from the phone's side there is no such file either way,
+    and a distinct error code would tell a caller which guesses were close.
+    """
+    from projects import workspace
+
+    conn = connect()
+    try:
+        found = projects_store.get(conn, project_id)
+    finally:
+        conn.close()
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such project")
+
+    try:
+        return {"name": name, "text": workspace.read_text(found, name)}
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=404, detail="no such file") from exc
+
+
 @app.get("/activity", dependencies=[Depends(require_token)])
 def activity(limit: int = 50) -> dict:
     """Recent utterances with the rows each one changed.
