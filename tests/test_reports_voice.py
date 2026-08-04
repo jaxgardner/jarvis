@@ -67,3 +67,89 @@ def test_a_report_can_carry_a_summary(db):
         rows(db, "SELECT summary FROM jobs WHERE id = ?", (job_id,))[0]["summary"]
         == "Compared three vendors; B is cheapest at $4,200/yr."
     )
+
+
+# ── the summarizer ────────────────────────────────────────
+
+
+class FakeResponse:
+    def __init__(self, text: str):
+        class Block:
+            type = "text"
+
+        block = Block()
+        block.text = text
+        self.content = [block]
+        self.usage = None
+
+
+@pytest.fixture
+def fake_model(monkeypatch):
+    """Stand in for Anthropic. Returns the dict of kwargs the call was made
+    with, so tests can assert on the prompt as well as the answer."""
+    from app import router
+
+    sent = {}
+
+    def reply_with(text: str = "Compared three vendors; B is cheapest."):
+        class FakeMessages:
+            def create(self, **kwargs):
+                sent.update(kwargs)
+                return FakeResponse(text)
+
+        class FakeClient:
+            messages = FakeMessages()
+
+        monkeypatch.setattr(router, "_CLIENT", FakeClient())
+        return sent
+
+    return reply_with
+
+
+def test_summarize_returns_the_models_prose(fake_model):
+    from app import reports
+
+    fake_model("Compared three vendors; B is cheapest at $4,200/yr.")
+    assert reports.summarize("## Vendors\n| B | $4,200 |") == (
+        "Compared three vendors; B is cheapest at $4,200/yr."
+    )
+
+
+def test_summarize_sends_the_report_and_bounds_the_call(fake_model):
+    """A hung call must not hold the worker, which drains its queue on a
+    30-second StartInterval."""
+    from app import reports
+
+    sent = fake_model()
+    reports.summarize("the whole report text")
+
+    assert "the whole report text" in str(sent["messages"])
+    assert sent["timeout"] == 30.0
+
+
+def test_summarize_swallows_a_model_failure(monkeypatch):
+    """The report is already saved and the push is already owed. A summarizer
+    that could take either down would be worse than no summarizer."""
+    from app import reports, router
+
+    class Exploding:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError("upstream is down")
+
+    monkeypatch.setattr(router, "_CLIENT", Exploding())
+    assert reports.summarize("anything") is None
+
+
+def test_summarize_does_not_call_the_model_for_an_empty_report(monkeypatch):
+    from app import reports, router
+
+    class Exploding:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise AssertionError("should not have been called")
+
+    monkeypatch.setattr(router, "_CLIENT", Exploding())
+    assert reports.summarize("   ") is None
