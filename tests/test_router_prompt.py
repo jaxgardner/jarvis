@@ -151,3 +151,30 @@ def test_the_prompt_size_is_recorded(client):
     print(f"cacheable prefix:     {cached} tokens (documented floor {CACHE_FLOOR})")
     print(f"whole router prompt:  {whole} tokens")
     assert whole > 0
+
+
+def test_context_is_in_the_live_half_not_the_static_one():
+    """The static block is byte-stable and carries the cache_control marker.
+    A question-derived block inside it kills prompt caching silently and
+    permanently — no error, both counters zero, and it reads as a working
+    optimisation forever."""
+    blocks = router.system_blocks(
+        "America/Denver", context="NOTE: the fence needs a post"
+    )
+    static, live = blocks[0], blocks[1]
+    assert "cache_control" in static
+    assert "fence" not in static["text"]
+    assert "fence" in live["text"]
+
+
+def test_static_half_is_byte_identical_across_contexts():
+    a = router.system_blocks("America/Denver", context="NOTE: one thing")
+    b = router.system_blocks("Europe/London", context="NOTE: a different thing")
+    assert a[0]["text"] == b[0]["text"]
+
+
+def test_empty_context_omits_the_heading():
+    """An empty CONTEXT: heading invites an answer from a block holding
+    nothing."""
+    live = router.system_blocks("America/Denver", context="")[1]["text"]
+    assert "CONTEXT" not in live

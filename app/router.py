@@ -553,7 +553,7 @@ Today is: {weekday}
 
 CALENDAR — copy dates from this table. Do not calculate them yourself.
 {calendar}
-{today}{reports}{projects}\
+{today}{reports}{projects}{context}\
 """
 
 
@@ -611,13 +611,16 @@ def projects_table(projects) -> str:
     )
 
 
-def system_blocks(tz_name: str, reports=(), projects=(), today: str = "") -> list[dict]:
+def system_blocks(
+    tz_name: str, reports=(), projects=(), today: str = "", context: str = ""
+) -> list[dict]:
     """The system prompt as two blocks, with the cache breakpoint between them.
 
     The marker goes on the static block, so the cached prefix is tools plus
     that block and nothing after it. Everything live — the clock, the
-    calendar table, TODAY, REPORTS, PROJECTS — is in the second block, which
-    is re-read every call and costs a few hundred tokens of prefill.
+    calendar table, TODAY, REPORTS, PROJECTS, CONTEXT — is in the second
+    block, which is re-read every call and costs a few hundred tokens of
+    prefill.
     """
     return [
         {
@@ -625,17 +628,21 @@ def system_blocks(tz_name: str, reports=(), projects=(), today: str = "") -> lis
             "text": _SYSTEM_STATIC,
             "cache_control": {"type": "ephemeral"},
         },
-        {"type": "text", "text": _live_half(tz_name, reports, projects, today)},
+        {"type": "text", "text": _live_half(tz_name, reports, projects, today, context)},
     ]
 
 
-def system_prompt(tz_name: str, reports=(), projects=(), today: str = "") -> str:
+def system_prompt(
+    tz_name: str, reports=(), projects=(), today: str = "", context: str = ""
+) -> str:
     """The same prompt as one string. What the model sees is `system_blocks`;
     this is for tests and for counting tokens."""
-    return _SYSTEM_STATIC + _live_half(tz_name, reports, projects, today)
+    return _SYSTEM_STATIC + _live_half(tz_name, reports, projects, today, context)
 
 
-def _live_half(tz_name: str, reports=(), projects=(), today: str = "") -> str:
+def _live_half(
+    tz_name: str, reports=(), projects=(), today: str = "", context: str = ""
+) -> str:
     local = timeutil.now(tz_name)
     table = reports_table(reports)
     # Omitted entirely rather than rendered empty — an empty table invites the
@@ -663,6 +670,23 @@ def _live_half(tz_name: str, reports=(), projects=(), today: str = "") -> str:
         if today.strip()
         else ""
     )
+    # CONTEXT last, and only when it has something in it.
+    #
+    # This is the one question-derived block in the prompt. TODAY above it is
+    # built before the utterance is read, which is what makes TODAY safe;
+    # this is not, so it is labelled as candidates rather than answers and
+    # the rules below tell the model what to do when it does not contain
+    # what was asked for.
+    context_block = (
+        "\nCONTEXT — notes and mail that mention words from this utterance. "
+        "These are candidates, not answers. If one of them answers the "
+        "question, use `answer` and say it directly. If none of them does, "
+        "call `query` — do not answer from this block by guessing, and never "
+        "say the question cannot be answered just because it is not here.\n"
+        f"{context}\n"
+        if context.strip()
+        else ""
+    )
     return _SYSTEM_LIVE.format(
         now_iso=local.isoformat(timespec="seconds"),
         tz_name=tz_name,
@@ -671,6 +695,7 @@ def _live_half(tz_name: str, reports=(), projects=(), today: str = "") -> str:
         today=today_block,
         reports=block,
         projects=project_block,
+        context=context_block,
     )
 
 
@@ -709,18 +734,19 @@ def _client() -> anthropic.Anthropic:
 
 
 def route(
-    text: str, tz_name: str, reports=(), projects=(), today: str = ""
+    text: str, tz_name: str, reports=(), projects=(), today: str = "", context: str = ""
 ) -> tuple[str, dict]:
     """Classify one utterance. Returns (tool_name, tool_input).
 
-    `reports`, `projects` and `today` are passed in rather than read here:
-    this module makes model calls and formats prompts, and giving it a
-    database connection would make it impossible to test either without one.
+    `reports`, `projects`, `today` and `context` are passed in rather than
+    read here: this module makes model calls and formats prompts, and giving
+    it a database connection would make it impossible to test either without
+    one.
     """
     response = _client().messages.create(
         model=MODEL,
         max_tokens=1024,
-        system=system_blocks(tz_name, reports, projects, today),
+        system=system_blocks(tz_name, reports, projects, today, context),
         tools=TOOLS,
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": text}],
