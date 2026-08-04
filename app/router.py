@@ -508,8 +508,9 @@ research_task rather than escalating separately.
 - Filing something under a project that already exists -> the normal tool for \
 what it is, with project_id set from PROJECTS.
 - What to cook, or a recipe from what is in the house -> escalate.
-- A question the TODAY block below already answers -> answer, putting the \
-spoken sentence in `reply`. This is the only tool that talks to the user.
+- A question the TODAY or CONTEXT block below already answers -> answer, \
+putting the spoken sentence in `reply`. This is the only tool that talks to \
+the user.
 - Any other question about stored information -> query.
 - An existing thing MOVING to a different time -> reschedule. Never add a \
 second copy of something that already exists.
@@ -532,9 +533,14 @@ morning brief", "what have I got going on today", "what's on tomorrow", \
 "anything I need to deal with", "when is my dentist appointment" are all \
 `answer` when the relevant line is in TODAY. Do not route these to query \
 merely because they are questions.
-- But only when TODAY actually holds it. If answering needs a note, an email, \
-a project or an old report, use query — TODAY is the day, not the archive. If \
-TODAY is absent or has no line bearing on the question, use query.
+- CONTEXT below, when it is there, is the archive already searched for this \
+utterance. If a line in it answers the question, that is `answer` as well — \
+the search has happened and query would only repeat it.
+- But only when TODAY or CONTEXT actually holds it. TODAY is the day, not the \
+archive, and CONTEXT is whatever happened to match the words you were given. \
+If neither has a line bearing on the question, use query. An absent or \
+unhelpful CONTEXT means the search still has to happen — never that there is \
+nothing to find.
 - One or two sentences, spoken to someone who cannot see a screen: no \
 markdown, no lists, no emoji, no ISO timestamps. Say times the way a person \
 would.

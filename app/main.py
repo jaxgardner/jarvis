@@ -276,9 +276,15 @@ def _say(req: SayRequest) -> dict:
         # in this call rather than a second one. ~3ms, in the transaction that
         # is already open.
         today = handlers.today_block(conn, tz_name)
+        # The archive's view of this utterance, fetched in the transaction
+        # that is already open. ~3ms, and it is what lets a question about a
+        # note be answered in this call instead of a second one.
+        context = handlers.context_block(conn, req.text)
 
     try:
-        tool, args = router.route(req.text, tz_name, reports, active_projects, today)
+        tool, args = router.route(
+            req.text, tz_name, reports, active_projects, today, context
+        )
     except Exception as exc:
         _finish(utterance_id, None, None, "Sorry — something went wrong.", started)
         raise HTTPException(status_code=502, detail=f"router failed: {exc}") from exc

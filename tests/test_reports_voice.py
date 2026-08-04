@@ -324,7 +324,10 @@ def spoken(client, monkeypatch):
     from app import router
 
     def route_as(tool, args):
-        monkeypatch.setattr(router, "route", lambda text, tz, reports=(), projects=(), today="": (tool, args))
+        def fake(text, tz, reports=(), projects=(), today="", context=""):
+            return tool, args
+
+        monkeypatch.setattr(router, "route", fake)
 
     return client, route_as
 
