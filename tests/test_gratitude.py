@@ -311,3 +311,75 @@ def test_no_history_is_a_zero_streak(db, monkeypatch):
         assert entries.streak(conn, "America/Denver") == 0
     finally:
         conn.close()
+
+
+def reply_for(db, items, utterance_id=None):
+    from app import handlers
+    from app.db import transaction
+
+    with transaction() as conn:
+        return handlers.log_gratitude(
+            conn, utterance_id, {"items": items}, "America/Denver"
+        )
+
+
+def test_the_first_thing_asks_for_two_more(db):
+    assert reply_for(db, ["the sun"]) == "That's one down. Two more when you're ready."
+
+
+def test_the_second_thing_asks_for_one_more(db):
+    reply_for(db, ["the sun"])
+    assert reply_for(db, ["Emma calling"]) == "That's two down. One more when you're ready."
+
+
+def test_the_third_thing_finishes_the_day(db):
+    assert reply_for(db, ["a", "b", "c"]) == "Three for today. Done."
+
+
+def test_a_fourth_thing_is_accepted(db):
+    """Refusing gratitude because a counter is full would be the app being
+    pedantic about its own bookkeeping."""
+    reply_for(db, ["a", "b", "c"])
+    assert reply_for(db, ["the car started"]) == "That's a fourth — logged."
+    assert len(rows(db, "SELECT id FROM gratitude_entries")) == 4
+
+
+def test_a_seventh_thing_stops_counting_out_loud(db):
+    reply_for(db, ["a", "b", "c"])
+    for _ in range(3):
+        reply_for(db, ["another"])
+    assert reply_for(db, ["and another"]) == "That's another one — logged."
+
+
+def test_the_reply_is_safe_to_speak(db):
+    reply = reply_for(db, ["the sun"])
+    assert "\n" not in reply
+    assert not any(ch in reply for ch in "*_#`[]")
+
+
+def test_the_handler_is_registered_for_the_router(db):
+    from app import handlers
+
+    assert handlers.FAST_HANDLERS["log_gratitude"] is handlers.log_gratitude
+
+
+def test_undo_reverses_a_whole_gratitude_turn(db):
+    """Two items in one turn write two mutation rows sharing one utterance_id.
+    Reversing one of them would leave half a sentence standing."""
+    from app import mutations
+    from app.db import transaction
+
+    with transaction() as conn:
+        utterance_id = int(
+            conn.execute(
+                "INSERT INTO utterances (raw_text, client) VALUES ('grateful for x and y','test')"
+            ).lastrowid
+        )
+
+    reply_for(db, ["the sun", "Emma calling"], utterance_id=utterance_id)
+    assert len(rows(db, "SELECT id FROM gratitude_entries")) == 2
+
+    with transaction() as conn:
+        mutations.undo_last(conn)
+
+    assert rows(db, "SELECT id FROM gratitude_entries") == []

@@ -76,6 +76,39 @@ def add_note(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     return "Noted."
 
 
+# Spoken counts, so the reply reads as speech rather than as a scoreboard.
+_GRATITUDE_WORDS = {1: "one", 2: "two", 3: "three"}
+_GRATITUDE_ORDINALS = {
+    4: "a fourth",
+    5: "a fifth",
+    6: "a sixth",
+    7: "another one",
+}
+
+
+def log_gratitude(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    """Record what the user is grateful for.
+
+    Three is a target, not a limit: a fourth thing is stored and the day still
+    reads complete. Turning down gratitude because a counter is full would be
+    the same pedantry `consume_item` already declines when it lists an unknown
+    food rather than complaining the pantry row is missing.
+    """
+    from gratitude import entries
+
+    _, total = entries.add(conn, utterance_id, args.get("items") or [], tz_name)
+
+    if total > entries.TARGET:
+        which = _GRATITUDE_ORDINALS.get(total, "another one")
+        return f"That's {which} — logged."
+    if total == entries.TARGET:
+        return "Three for today. Done."
+
+    left = entries.TARGET - total
+    more = "One more" if left == 1 else f"{_GRATITUDE_WORDS[left].capitalize()} more"
+    return f"That's {_GRATITUDE_WORDS[total]} down. {more} when you're ready."
+
+
 def consume_item(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     """Record food used up.
 
@@ -849,6 +882,7 @@ FAST_HANDLERS = {
     "add_event": add_event,
     "add_reminder": add_reminder,
     "add_note": add_note,
+    "log_gratitude": log_gratitude,
     "consume_item": consume_item,
     "add_item": add_item,
     "add_to_list": add_to_list,
