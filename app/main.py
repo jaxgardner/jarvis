@@ -315,8 +315,13 @@ def _say(req: SayRequest) -> dict:
             "ok": "Picking up where we left off. I'll ping you.",
             "live": "That one's still working. I'll leave it be.",
         }.get(outcome, "On it. I'll ping you when it's done.")
-        latency = _finish(utterance_id, "deep", tool, reply, started)
+        # Before _finish, not after. The reply has existed since the handler
+        # returned, and _finish opens a transaction to close out the utterance
+        # row — small, but it is time the synthesis thread could already be
+        # running in. Non-blocking and unable to raise, so /say's budget is
+        # untouched either way.
         synth.prefetch(reply)
+        latency = _finish(utterance_id, "deep", tool, reply, started)
         return {
             "reply": reply,
             "route": "deep",
@@ -337,8 +342,9 @@ def _say(req: SayRequest) -> dict:
         # queued is a fast-path write like any other, and reporting it as deep
         # would have the phone poll a job that does not exist.
         route = "deep" if job_id is not None else "fast"
-        latency = _finish(utterance_id, route, tool, reply, started)
+        # Before _finish, for the reason given on the escalate branch above.
         synth.prefetch(reply)
+        latency = _finish(utterance_id, route, tool, reply, started)
         response = {
             "reply": reply,
             "route": route,
@@ -362,14 +368,18 @@ def _say(req: SayRequest) -> dict:
         _finish(utterance_id, "fast", tool, "Sorry — I didn't catch that.", started)
         raise HTTPException(status_code=422, detail=f"bad tool args: {exc}") from exc
 
-    latency = _finish(utterance_id, "fast", tool, reply, started)
     # Start the voice before the phone asks for it. The reply has existed
     # since the handler returned; waiting for /speech to arrive would leave
     # the model idle across a round trip it could have been working through.
     # Non-blocking and unable to raise — /say's budget is untouched, which is
     # the whole reason synthesis is a second endpoint rather than part of this
     # one.
+    #
+    # Above _finish rather than below it, for the same reason: _finish opens a
+    # transaction to close out the utterance row, and that is time the
+    # synthesis thread could already be running in.
     synth.prefetch(reply)
+    latency = _finish(utterance_id, "fast", tool, reply, started)
     return {
         "reply": reply,
         "route": "fast",

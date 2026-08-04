@@ -207,7 +207,12 @@ def test_say_starts_the_voice_before_the_phone_asks(db, monkeypatch):
     monkeypatch.setattr(synth, "_current", None)
     stub_conversion(monkeypatch)
     monkeypatch.setattr(
-        router, "route", lambda text, tz, reports=(), projects=(), today="": ("add_note", {"body": "buy stamps"})
+        router,
+        "route",
+        lambda text, tz, reports=(), projects=(), today="", context="": (
+            "add_note",
+            {"body": "buy stamps"},
+        ),
     )
 
     handle = TestClient(app)
