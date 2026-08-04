@@ -6,10 +6,12 @@ import SwiftUI
 /// because a latency figure with no target next to it is just trivia — and
 /// `CLAUDE.md` is unambiguous that p95 over 2s is a bug, not a data point.
 ///
-/// This is also the door to the three surfaces that have no home of their own:
-/// ingest health, the inbox, and enrolled devices. They live behind Health
-/// rather than as tabs because you go looking for them when something feels
-/// wrong, which is the same reason you open this screen at all.
+/// This is also the door to the four surfaces that have no home of their own:
+/// ingest health, the inbox, enrolled devices, and the activity log. They live
+/// behind Health rather than as tabs because you go looking for them when
+/// something feels wrong, which is the same reason you open this screen at all
+/// — and Activity is exactly that: you want it when something you said came
+/// out wrong.
 struct HealthView: View {
     @EnvironmentObject private var api: JarvisAPI
 
@@ -227,6 +229,7 @@ struct HealthView: View {
             }
             NavRow(title: "Inbox") { InboxView() }
             NavRow(title: "Devices") { DevicesView() }
+            NavRow(title: "Activity") { ActivityView() }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {

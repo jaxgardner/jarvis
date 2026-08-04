@@ -32,14 +32,14 @@ struct JarvisApp: App {
 /// treatment, the mono labels and the pending-proposal badge are all part of
 /// the design language, and the stock bar can carry none of them.
 enum JarvisTab: String, CaseIterable, Hashable {
-    case talk, agenda, pantry, activity, reports, proposals, health
+    case talk, agenda, pantry, gratitude, reports, proposals, health
 
     var label: String {
         switch self {
         case .talk: return "Talk"
         case .agenda: return "Agenda"
         case .pantry: return "Pantry"
-        case .activity: return "Activity"
+        case .gratitude: return "Gratitude"
         case .reports: return "Reports"
         case .proposals: return "Review"
         case .health: return "Health"
@@ -56,7 +56,7 @@ enum JarvisTab: String, CaseIterable, Hashable {
         case .talk: return "mic.fill"
         case .agenda: return "calendar"
         case .pantry: return "refrigerator"
-        case .activity: return "waveform"
+        case .gratitude: return "sparkles"
         case .reports: return "doc.text.magnifyingglass"
         case .proposals: return "tray.full"
         case .health: return "heart.text.square"
@@ -87,7 +87,7 @@ struct RootView: View {
                 case .talk: TalkView()
                 case .agenda: AgendaView()
                 case .pantry: PantryView()
-                case .activity: ActivityView()
+                case .gratitude: GratitudeView()
                 case .reports: ReportsView()
                 case .proposals: ProposalsView(pendingCount: $pendingProposals)
                 case .health: HealthView()
