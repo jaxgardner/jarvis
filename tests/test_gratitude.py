@@ -1,10 +1,14 @@
 """Logging three things a day, and the streak behind them."""
 
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from tests.helpers import apply_migrations
+
+DENVER = ZoneInfo("America/Denver")
 
 
 @pytest.fixture
@@ -47,3 +51,43 @@ def test_gratitude_entries_is_a_writable_domain_table(db):
     ]
     logged = rows(db, "SELECT table_name, op, row_id FROM mutations")
     assert logged == [{"table_name": "gratitude_entries", "op": "insert", "row_id": row_id}]
+
+
+def test_late_evening_belongs_to_today():
+    from gratitude import entries
+
+    assert entries.day_for(datetime(2026, 8, 4, 23, 50, tzinfo=DENVER)) == "2026-08-04"
+
+
+def test_after_midnight_belongs_to_the_day_before():
+    """The prompt lands at 10pm and is sometimes answered at half past twelve.
+    That entry belongs to the day you were thinking about, not to the one that
+    started twenty minutes ago."""
+    from gratitude import entries
+
+    assert entries.day_for(datetime(2026, 8, 5, 0, 30, tzinfo=DENVER)) == "2026-08-04"
+
+
+def test_morning_belongs_to_itself():
+    from gratitude import entries
+
+    assert entries.day_for(datetime(2026, 8, 5, 7, 0, tzinfo=DENVER)) == "2026-08-05"
+
+
+def test_four_am_is_the_boundary():
+    from gratitude import entries
+
+    assert entries.day_for(datetime(2026, 8, 5, 3, 59, tzinfo=DENVER)) == "2026-08-04"
+    assert entries.day_for(datetime(2026, 8, 5, 4, 0, tzinfo=DENVER)) == "2026-08-05"
+
+
+def test_both_halves_of_a_fall_back_night_land_on_the_same_day():
+    """01:30 happens twice on 2026-11-01 in Denver. Both are before the
+    cutoff, so both belong to Halloween — the ambiguous hour must not split
+    one evening across two days."""
+    from gratitude import entries
+
+    first = datetime(2026, 11, 1, 1, 30, tzinfo=DENVER, fold=0)
+    second = datetime(2026, 11, 1, 1, 30, tzinfo=DENVER, fold=1)
+    assert entries.day_for(first) == "2026-10-31"
+    assert entries.day_for(second) == "2026-10-31"

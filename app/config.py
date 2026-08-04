@@ -54,6 +54,13 @@ RECEIPT_DIR = DB_PATH.parent / "receipts"
 # Local hour at which the day-before expiry push goes out. 17:00 is late
 # enough that you can still cook or shop, early enough to act on.
 PANTRY_EXPIRY_HOUR = int(os.getenv("PANTRY_EXPIRY_HOUR", "17"))
+
+# ── gratitude ─────────────────────────────────────────────
+# The local hour the evening prompt goes out, and the hour the gratitude day
+# rolls over. Both are personal facts about when an evening ends rather than
+# facts about the system, which is why they are .env and not constants.
+GRATITUDE_HOUR = int(os.getenv("GRATITUDE_HOUR", "22"))
+GRATITUDE_DAY_START = int(os.getenv("GRATITUDE_DAY_START", "4"))
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
 
 # ── speech ────────────────────────────────────────────────
