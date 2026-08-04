@@ -761,6 +761,56 @@ def pending_proposals(conn, limit: int, tz_name: str) -> list[dict]:
     return proposals
 
 
+# ── replying to a report ──────────────────────────────────
+# A reply re-queues the job it belongs to rather than inserting a new one.
+# Deliberately not routed through app.mutations: jobs are operational rows,
+# and /undo exists to reverse things you said to the assistant, not to
+# un-send an answer to one of its questions.
+
+
+def reply_to_job(conn, job_id: int, text: str) -> str:
+    """Queue `text` as the next input to an already-finished job.
+
+    Returns "ok", "missing" (no such job), or "live" (still queued or
+    running, so its session cannot be resumed).
+    """
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return "missing"
+    if row["status"] in ("queued", "running"):
+        return "live"
+
+    # `result` is deliberately left alone: you keep reading the old report
+    # while the rerun works, and the worker overwrites it on finish.
+    # `attempts` resets because MAX_ATTEMPTS counts across the life of the
+    # row — a job already at 2 would give your reply no retries at all.
+    conn.execute(
+        """UPDATE jobs SET pending_input = ?, status = 'queued', attempts = 0,
+                           error = NULL, started_at = NULL, finished_at = NULL
+             WHERE id = ?""",
+        (text.strip(), job_id),
+    )
+    return "ok"
+
+
+def resume_latest_job(conn, text: str) -> int | None:
+    """Re-queue the most recent finished job with `text` as the reply.
+
+    What a spoken follow-up resolves to. `session_id IS NOT NULL` because
+    resuming the earlier conversation is the entire point — a job that never
+    got a session would start cold with no idea what "the second one" was.
+    """
+    row = conn.execute(
+        """SELECT id FROM jobs
+             WHERE status = 'done' AND session_id IS NOT NULL
+             ORDER BY id DESC LIMIT 1"""
+    ).fetchone()
+    if row is None:
+        return None
+    job_id = int(row["id"])
+    return job_id if reply_to_job(conn, job_id, text) == "ok" else None
+
+
 # `escalate` is handled in main.py — it enqueues a job rather than writing a
 # domain row, so it doesn't share this signature.
 FAST_HANDLERS = {
