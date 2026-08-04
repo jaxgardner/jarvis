@@ -82,8 +82,20 @@ done
 echo
 echo "state:"
 for LABEL in "${LABELS[@]}"; do
+    # The question this line has to answer is "did the install work", and
+    # launchd's own wording answers a different one. Only com.jarvis.api is a
+    # long-lived process; the rest run briefly on an interval or a calendar
+    # and are "not running" almost always. Printing that verbatim makes a
+    # healthy install look like five failures, and printing awk's $3 made it
+    # a bare "not" — worse. So: loaded and idle is the normal resting state
+    # and says so, and only genuinely absent says "NOT LOADED".
     STATE=$(launchctl print "system/${LABEL}" 2>/dev/null \
-              | awk '/^\tstate = /{print $3; exit}')
+              | awk '/^\tstate = /{sub(/^\tstate = /, ""); print; exit}')
+    case "$STATE" in
+        running)     STATE="running" ;;
+        "not running") STATE="loaded · idle until its next run" ;;
+        "")          STATE="NOT LOADED" ;;
+    esac
     printf '  %-24s %s\n' "$LABEL" "${STATE:-not loaded}"
 done
 
