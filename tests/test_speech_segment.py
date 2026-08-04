@@ -104,3 +104,18 @@ def test_nothing_is_dropped_or_rewritten():
 def test_empty_text_produces_nothing_to_say():
     assert segments("") == []
     assert segments("   ") == []
+
+
+def test_short_leading_clause_is_its_own_chunk():
+    """First sound is gated by chunk one. A short clause behind a comma is
+    worth cutting; 24 was leaving the listener waiting through the rest of
+    the sentence."""
+    chunks = segments("Got it, I'll remind you at four this afternoon.")
+    assert chunks[0] == "Got it,"
+
+
+def test_very_short_fragment_still_not_cut():
+    """Below the floor a fragment sounds clipped, which is the thing the
+    floor exists to prevent."""
+    chunks = segments("Yes, that is right.")
+    assert chunks[0] == "Yes, that is right."

@@ -34,7 +34,27 @@ _TRAILING = ".!?…\"')]»"
 # is taken. A sentence boundary needs none: "Noted." is a whole utterance and
 # sounds like one. "Got it —" at eight characters is still comfortably a
 # phrase. Behind a comma, a fragment needs to be long enough to carry itself.
-_MIN_FIRST = {_SENTENCE: 0, _BREAK: 8, _SOFT: 24}
+#
+# The comma floor was 24 and came down to 8 when the turn was measured end to
+# end: first sound is gated by chunk one and nothing else.
+#
+# What it buys is narrower than it looks, and worth being accurate about. The
+# templated confirmations all open on an em dash — "Got it — I'll remind you
+# to…", "Noted — some of the…", "Undone — I removed…" — and "Got it —" is
+# eight characters, so _BREAK was already cutting every one of them. Lowering
+# the comma changes nothing about those replies.
+#
+# It is the `answer` tool this is for. Pre-retrieval made spoken answers the
+# common shape of a question rather than a rarity, and those are free prose
+# rather than a template: "Right now, you've got the dentist at three" opens
+# on an eleven-character comma clause that 24 refused and 8 takes.
+#
+# 8 rather than lower because it is the length "Got it —" already clears at
+# _BREAK, and the two read alike out loud — what makes the comma the slighter
+# mark is the pause it carries, not the phrase in front of it. Below 8 the
+# fragments that start appearing are "Yes," and "Sure," alone, which is the
+# clipped sound the floor exists to prevent.
+_MIN_FIRST = {_SENTENCE: 0, _BREAK: 8, _SOFT: 8}
 
 # After the first chunk the race is already won: playback has started and
 # synthesis is ahead of it. Longer chunks from here mean fewer seams.
