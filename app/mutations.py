@@ -22,6 +22,7 @@ WRITABLE = {
     "receipts",
     "pantry_items",
     "shopping_list",
+    "gratitude_entries",
 }
 SOFT_DELETE = {"events", "notes"}  # have a deleted_at column
 
