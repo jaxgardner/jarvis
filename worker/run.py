@@ -55,6 +55,28 @@ WORK_DIR = Path.home() / "Library" / "Application Support" / "jarvis" / "work"
 # what stops that from also being a credential leak.
 ALLOWED_TOOLS: str | None = None
 
+# What a reply says to the resumed session.
+#
+# The instruction to restate the whole report is the load-bearing half: the
+# resumed run's answer *replaces* `result`, so an answer that only addresses
+# the question leaves the report a fragment. Told to restate, the agent
+# produces a document that stands on its own, which is why nothing needs to
+# keep the superseded version.
+REPLY_WRAPPER = """The user replied to your last report:
+
+{reply}
+
+Continue the task with that. When you are finished, end your response with the
+complete updated report, self-contained and standing on its own. It replaces
+your previous report rather than adding to it, so do not refer to what you
+said before or describe what changed."""
+
+
+def _prompt_for(job: dict) -> str:
+    """The -p argument: a wrapped reply when one is waiting, else the ask."""
+    reply = (job.get("pending_input") or "").strip()
+    return REPLY_WRAPPER.format(reply=reply) if reply else job["prompt"]
+
 
 def _claim() -> dict | None:
     """Take the oldest queued job. UPDATE...RETURNING so two workers can't
@@ -100,7 +122,7 @@ def _command(job: dict, session_id: str, resume: bool) -> list[str]:
     cmd = [
         "claude",
         "-p",
-        job["prompt"],
+        _prompt_for(job),
         "--output-format",
         "json",
         "--mcp-config",
@@ -131,9 +153,12 @@ def _command(job: dict, session_id: str, resume: bool) -> list[str]:
 
 
 def _finish(job_id: int, status: str, result: str | None, error: str | None) -> None:
+    # pending_input is cleared here and not in _requeue: a finished run has
+    # consumed the reply, a retry has not.
     with transaction() as conn:
         conn.execute(
             """UPDATE jobs SET status = ?, result = ?, error = ?,
+                               pending_input = NULL,
                                finished_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
                  WHERE id = ?""",
             (status, result, error, job_id),

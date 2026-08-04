@@ -141,6 +141,31 @@ def test_allowlist_is_applied_when_set(monkeypatch):
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,WebSearch"
 
 
+def test_a_plain_job_passes_its_prompt_through_untouched():
+    cmd = worker._command({"prompt": "compare vendors"}, "s", resume=False)
+    assert cmd[cmd.index("-p") + 1] == "compare vendors"
+
+
+def test_a_reply_is_wrapped_and_replaces_the_prompt():
+    """The reply carries an instruction to restate the whole report. Without
+    it the agent answers the question alone, and `result` — which the reply
+    overwrites — becomes a fragment that reads as a non-sequitur."""
+    job = {"prompt": "compare vendors", "pending_input": "Go with B"}
+    cmd = worker._command(job, "s", resume=True)
+    sent = cmd[cmd.index("-p") + 1]
+
+    assert "Go with B" in sent
+    assert "compare vendors" not in sent
+    assert "self-contained" in sent
+
+
+def test_an_empty_reply_falls_back_to_the_original_prompt():
+    """Whitespace is not an answer. Wrapping it would ask the agent to
+    continue from nothing and rewrite a good report around it."""
+    job = {"prompt": "compare vendors", "pending_input": "   "}
+    assert worker._prompt_for(job) == "compare vendors"
+
+
 def test_jobs_do_not_run_inside_the_repo():
     """With a shell available, cwd must not be the directory holding .env."""
     assert worker.WORK_DIR != REPO_ROOT
@@ -231,6 +256,75 @@ def test_summary_truncates_rather_than_flooding_the_notification():
 
 def test_summary_survives_empty_output():
     assert worker._summarize("") == "Done."
+
+
+def test_finishing_clears_the_reply_it_consumed(tmp_path, monkeypatch):
+    """Left set, the next run of that job would re-send an answer you already
+    gave — and the wrapper would tell the agent to rewrite a report around
+    something it has already incorporated."""
+    from tests.helpers import apply_migrations
+
+    path = tmp_path / "finish.db"
+    apply_migrations(path)
+
+    import app.db as appdb
+
+    monkeypatch.setattr(appdb, "DB_PATH", path)
+
+    from app.db import transaction
+
+    with transaction() as conn:
+        job_id = int(
+            conn.execute(
+                "INSERT INTO jobs (prompt, status, pending_input) VALUES (?,?,?)",
+                ("compare vendors", "running", "Go with B"),
+            ).lastrowid
+        )
+
+    worker._finish(job_id, "done", "Booked vendor B for Tuesday.", None)
+
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT status, result, pending_input FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+    assert row["pending_input"] is None
+    assert row["result"] == "Booked vendor B for Tuesday."
+
+
+def test_requeueing_keeps_the_reply_so_the_retry_answers_the_same_thing(
+    tmp_path, monkeypatch
+):
+    """A transient failure must retry your reply, not silently fall back to
+    re-running the original ask from a session that has already moved on."""
+    from tests.helpers import apply_migrations
+
+    path = tmp_path / "requeue.db"
+    apply_migrations(path)
+
+    import app.db as appdb
+
+    monkeypatch.setattr(appdb, "DB_PATH", path)
+
+    from app.db import transaction
+
+    with transaction() as conn:
+        job_id = int(
+            conn.execute(
+                "INSERT INTO jobs (prompt, status, pending_input) VALUES (?,?,?)",
+                ("compare vendors", "running", "Go with B"),
+            ).lastrowid
+        )
+
+    worker._requeue(job_id, "timed out after 300s")
+
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT status, pending_input FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+    assert row["status"] == "queued"
+    assert row["pending_input"] == "Go with B"
 
 
 # ── pantry, over the deep path ────────────────────────────
