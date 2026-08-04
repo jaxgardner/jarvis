@@ -111,6 +111,13 @@ struct RootView: View {
         .onChange(of: router.pendingJobID) { _, id in
             if id != nil { tab = .reports }
         }
+        // The mic latch can be set while another tab is showing — a tapped
+        // gratitude push, from anywhere in the app. TalkView consumes it, but
+        // only once it is on screen. Cold launch needs no equivalent: Talk is
+        // already the default tab.
+        .onChange(of: router.shouldStartListening) { _, wants in
+            if wants { tab = .talk }
+        }
     }
 
     private var statusStrip: some View {

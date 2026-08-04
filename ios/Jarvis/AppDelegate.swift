@@ -80,7 +80,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // The notification was tapped. A finished job has somewhere to
             // land now, and landing on whichever tab happened to be showing
             // makes the push pointless.
-            if let jobID { LaunchRouter.shared.openJob(jobID) }
+            if let jobID {
+                LaunchRouter.shared.openJob(jobID)
+            } else if info["kind"] as? String == "gratitude" {
+                // Straight to the mic. The whole reason the prompt exists is
+                // that answering it should take no taps after the first.
+                LaunchRouter.shared.requestListening()
+            }
         }
     }
 }
