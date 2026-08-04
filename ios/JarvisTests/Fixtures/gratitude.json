@@ -1,0 +1,22 @@
+{
+  "today": {
+    "on": "2026-08-04",
+    "target": 3,
+    "entries": [
+      {"id": 91, "body": "the sun", "at": "2026-08-05T02:12:00Z"},
+      {"id": 92, "body": "Emma calling", "at": "2026-08-05T02:12:00Z"}
+    ]
+  },
+  "streak": 9,
+  "days": [
+    {
+      "on": "2026-08-03",
+      "entries": [
+        {"id": 88, "body": "a quiet morning", "at": "2026-08-04T03:40:00Z"},
+        {"id": 89, "body": "the rain", "at": "2026-08-04T03:40:00Z"},
+        {"id": 90, "body": "finishing the draft", "at": "2026-08-04T03:40:00Z"}
+      ]
+    },
+    {"on": "2026-08-02", "entries": [{"id": 87, "body": "coffee", "at": "2026-08-03T04:02:00Z"}]}
+  ]
+}

@@ -177,6 +177,28 @@ struct ContractTests {
         #expect(response.jobId == 27)
         #expect(response.changed == nil)
     }
+
+    // MARK: - Gratitude
+
+    @Test func gratitudeDecodes() throws {
+        let response = try Self.decode(GratitudeResponse.self, from: "gratitude")
+
+        #expect(response.today.on == "2026-08-04")
+        #expect(response.today.target == 3)
+        #expect(response.today.entries.count == 2)
+        #expect(response.today.entries[0].body == "the sun")
+        #expect(response.streak == 9)
+        #expect(response.days.map(\.on) == ["2026-08-03", "2026-08-02"])
+    }
+
+    @Test func anIncompleteDayDecodesWithoutPadding() throws {
+        /// The server sends what was actually said; the three slots are the
+        /// view's business. A client that expected three entries per day would
+        /// throw on every day anyone answered twice.
+        let response = try Self.decode(GratitudeResponse.self, from: "gratitude")
+        let short = try #require(response.days.first { $0.on == "2026-08-02" })
+        #expect(short.entries.count == 1)
+    }
 }
 
 /// Anchors `Bundle(for:)` to the test bundle rather than the app's.

@@ -212,6 +212,35 @@ struct PantryResponse: Decodable {
     let shoppingList: [ListEntry]
 }
 
+/// Three things a day, and the days behind them.
+///
+/// `today` is separate from `days` rather than being its first element: the
+/// card and the history render differently, and the view should not have to
+/// work out which group is now.
+struct GratitudeResponse: Decodable {
+    struct Entry: Decodable, Identifiable {
+        let id: Int
+        let body: String
+        let at: String
+    }
+
+    struct Today: Decodable {
+        let on: String
+        let target: Int
+        let entries: [Entry]
+    }
+
+    struct Day: Decodable, Identifiable {
+        let on: String
+        let entries: [Entry]
+        var id: String { on }
+    }
+
+    let today: Today
+    let streak: Int
+    let days: [Day]
+}
+
 struct ReceiptResponse: Decodable {
     let receiptId: Int
     let status: String
@@ -707,6 +736,10 @@ final class JarvisAPI: ObservableObject {
 
     func pantry() async throws -> PantryResponse {
         try await send("/pantry")
+    }
+
+    func gratitude(days: Int = 30) async throws -> GratitudeResponse {
+        try await send("/gratitude?days=\(days)")
     }
 
     func addShoppingEntry(_ name: String) async throws {
