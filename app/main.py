@@ -7,10 +7,12 @@ the public internet — there is no port forward — but /say still requires a
 bearer token, because "it's on a private network" is not authentication.
 """
 
+import itertools
 import secrets
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -25,6 +27,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app import config, devices, handlers, mutations, router, timeutil, usage
@@ -170,8 +173,20 @@ def _tts_health() -> dict:
     return {
         "available": synth.available(),
         "loaded": synth.loaded(),
-        "voice": config.TTS_VOICE,
+        # Both halves, because the voice is both. The model decides the words,
+        # the accent and the timing; the reference decides the timbre. Either
+        # one being wrong sounds like "the voice is wrong", and this is where
+        # you would look to tell which.
+        "model": config.TTS_MODEL,
+        "reference": config.TTS_REFERENCE,
+        "chunked": config.TTS_STREAM_CHUNKS,
+        # Two numbers because they answer different questions. `last_synth_ms`
+        # is the cost of a reply; `last_first_chunk_ms` is how long the phone
+        # waited before it could start playing, which is the one the design is
+        # actually trying to move. A big gap between them means chunking is
+        # working.
         "last_synth_ms": synth.last_synth_ms,
+        "last_first_chunk_ms": synth.last_first_chunk_ms,
     }
 
 
@@ -274,6 +289,7 @@ def _say(req: SayRequest) -> dict:
             else "On it. I'll ping you when it's done."
         )
         latency = _finish(utterance_id, "deep", tool, reply, started)
+        synth.prefetch(reply)
         return {
             "reply": reply,
             "route": "deep",
@@ -295,6 +311,13 @@ def _say(req: SayRequest) -> dict:
         raise HTTPException(status_code=422, detail=f"bad tool args: {exc}") from exc
 
     latency = _finish(utterance_id, "fast", tool, reply, started)
+    # Start the voice before the phone asks for it. The reply has existed
+    # since the handler returned; waiting for /speech to arrive would leave
+    # the model idle across a round trip it could have been working through.
+    # Non-blocking and unable to raise — /say's budget is untouched, which is
+    # the whole reason synthesis is a second endpoint rather than part of this
+    # one.
+    synth.prefetch(reply)
     return {
         "reply": reply,
         "route": "fast",
@@ -847,16 +870,34 @@ class SpeechRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+# Length-prefixed WAVs, not one WAV: a four-byte big-endian length followed by
+# that many bytes of complete, self-contained WAV, repeated until the body
+# ends. Framing rather than raw PCM because the phone can then still tell
+# audio from anything else — an unframed PCM stream would render a stray error
+# body as a burst of noise, where a bad RIFF header is simply not playable and
+# takes the Apple-voice path like every other failure.
+CHUNKED_WAV = "audio/x-jarvis-chunked-wav"
+
+
 @app.post("/speech", dependencies=[Depends(require_token)])
 def speech(req: SpeechRequest) -> Response:
-    """Text in, audio out. Deliberately unaware of `utterances`.
+    """Text in, audio out, in clause-sized pieces. Unaware of `utterances`.
 
     A reply is not the only thing worth speaking — a job result or a
     notification body would use this too — and keying audio to a row would
     rule that out for no gain.
 
-    `def`, not `async def`: onnxruntime inference is CPU-bound and would block
-    the event loop. Starlette runs sync endpoints in a threadpool.
+    The first chunk is pulled here, before the response exists, and that is
+    load-bearing: a streaming response commits to its status code the moment
+    the headers go out, so anything that can fail has to fail before then. An
+    unspeakable voice or a dead worker therefore still reaches the phone as a
+    clean 503, which is the signal it turns into "use the Apple voice". It
+    costs nothing — the first chunk is what the phone is waiting for anyway.
+
+    `def`, not `async def`: even though inference now happens on its own
+    thread, this endpoint blocks waiting for it, and blocking the event loop
+    would stall every other request. Starlette runs sync endpoints in a
+    threadpool.
     """
     if not synth.available():
         # The phone turns this into "use the Apple voice". It is a normal
@@ -864,9 +905,22 @@ def speech(req: SpeechRequest) -> Response:
         # error worth logging loudly.
         raise HTTPException(status_code=503, detail="tts unavailable")
 
-    audio = synth.speak(req.text)
-    return Response(
-        content=audio,
-        media_type="audio/wav",
-        headers={"X-Synth-Ms": str(synth.last_synth_ms or 0)},
+    chunks = synth.stream(req.text)
+    try:
+        first = next(chunks)
+    except StopIteration:
+        raise HTTPException(status_code=503, detail="tts produced no audio") from None
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"tts failed: {exc}") from exc
+
+    return StreamingResponse(
+        _framed(first, chunks),
+        media_type=CHUNKED_WAV,
+        headers={"X-Synth-First-Ms": str(synth.last_first_chunk_ms or 0)},
     )
+
+
+def _framed(first: bytes, rest: Iterator[bytes]) -> Iterator[bytes]:
+    for chunk in itertools.chain([first], rest):
+        yield len(chunk).to_bytes(4, "big")
+        yield chunk

@@ -22,20 +22,39 @@ The project builds and runs in the simulator without any of this — but with
 
 ## The voice
 
-Replies are spoken by Kokoro-82M running on the Mini, not by the phone. The
-weights are ~310 MB and are not in the repo:
+Replies are spoken on the Mini, not by the phone, in two stages: a Piper voice
+says the words, and Kanade converts that audio toward a reference clip, which
+is what gives it its timbre. Neither half is optional — Piper alone is the
+wrong voice, and there is nothing to convert without it.
+
+The weights are ~700 MB across three files and are not in the repo:
 
     VOICES="$HOME/Library/Application Support/jarvis/voices"
-    mkdir -p "$VOICES"
-    curl -L -o "$VOICES/kokoro-v1.0.onnx" \
-      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
-    curl -L -o "$VOICES/voices-v1.0.bin" \
-      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+    mkdir -p "$VOICES/piper" "$VOICES/kanade"
 
-Without them the server answers 503 on `/speech` and the phone uses Apple's
-synthesizer. That is a working configuration — it just sounds like a screen
-reader, which is the thing this exists to fix. `GET /health` reports which
-one you are getting.
+    # 1. The Piper voice that speaks.
+    BASE=https://huggingface.co/jgkawell/jarvis/resolve/main/en/en_GB/jarvis
+    curl -L -o "$VOICES/piper/jarvis-high.onnx"      "$BASE/high/jarvis-high.onnx"
+    curl -L -o "$VOICES/piper/jarvis-high.onnx.json" "$BASE/high/jarvis-high.onnx.json"
+
+    # 2. The clip it is converted toward. Any clean mono recording works;
+    #    this is the one the deployed voice was chosen against.
+    curl -L -o "$VOICES/jarvis-reference.mp3" "$BASE/high/samples/speaker_0.mp3"
+
+    # 3. The converter.
+    KANADE=https://huggingface.co/frothywater/kanade-25hz-clean/resolve/main
+    curl -L -o "$VOICES/kanade/config.yaml"      "$KANADE/config.yaml"
+    curl -L -o "$VOICES/kanade/model.safetensors" "$KANADE/model.safetensors"
+
+WavLM is pulled once by torchaudio into `$VOICES/torch/`, which `speech/clone.py`
+points `TORCH_HOME` at so nothing lands in a user-level cache the weights
+directory does not own.
+
+Without all of them the server answers 503 on `/speech` and the phone uses
+Apple's synthesizer. That is a working configuration — it just sounds like a
+screen reader, which is the thing this exists to fix. `GET /health` reports
+which one you are getting, and names the model and reference separately so a
+wrong-sounding voice can be traced to whichever half is wrong.
 
 ## Layout
 

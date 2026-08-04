@@ -63,10 +63,26 @@ TTS_MODEL_DIR = Path(
     os.getenv("TTS_MODEL_DIR", "").strip() or DB_PATH.parent / "voices"
 ).expanduser()
 
-# Set by the audition in docs/superpowers/plans/2026-08-01-jarvis-voice.md.
-# One line to change if it ever grates.
-TTS_VOICE = os.getenv("TTS_VOICE", "bm_george").strip()
+# The Piper voice that speaks, as a filename stem under `voices/piper/`. It
+# supplies the words, the accent and the timing; the timbre comes from
+# TTS_REFERENCE below, via the conversion in speech/clone.py. Both were
+# settled by listening — see speech/audition.py.
+TTS_MODEL = os.getenv("TTS_MODEL", "jarvis-high").strip()
+
+# The clip whose voice every reply is converted toward, relative to
+# TTS_MODEL_DIR. Swapping this swaps the assistant's voice without retraining
+# anything, which is the whole reason the pipeline is two stages.
+TTS_REFERENCE = os.getenv("TTS_REFERENCE", "jarvis-reference.mp3").strip()
+
 TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
+
+# Synthesize a reply in clause-sized pieces and stream them, so playback
+# starts after the first clause instead of after the whole reply — worth about
+# 850ms on a one-sentence reply. The cost is a seam at each cut, since every
+# piece gets its own intonation. Set to 0 to go back to one utterance per
+# reply; like TTS_VOICE, whether it sounds right is a question for ears, so it
+# is a line in .env rather than a code path.
+TTS_STREAM_CHUNKS = os.getenv("TTS_STREAM_CHUNKS", "1").strip() not in {"0", "false", "no"}
 
 # Read lazily via the helpers below — /health must work before these are set,
 # so importing this module cannot be allowed to fail on a missing key.

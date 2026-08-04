@@ -17,10 +17,22 @@ dependencies = [
     # FastAPI's UploadFile is multipart/form-data, which Starlette will not
     # parse without this. Absent it, the receipts endpoint fails at import.
     "python-multipart>=0.0.9",
-    # Local TTS. The onnxruntime build of Kokoro-82M, not the reference
-    # `kokoro` package — same weights, a seventh of the install, and no
-    # PyTorch in a repo whose dependency list should stay readable.
+    # Local TTS, in two stages. Piper speaks (VITS over onnxruntime, ~45x
+    # realtime); Kanade then converts that audio toward a reference clip,
+    # which is what makes it the assistant's voice rather than Piper's.
+    #
+    # Kanade is PyTorch, and this repo previously chose `kokoro-onnx` over the
+    # reference `kokoro` package specifically to keep torch out. That decision
+    # is reversed here deliberately and with a measured reason: conversion is
+    # the only thing that produced the intended voice, and it costs ~385ms and
+    # ~2.5GB to get it. `kokoro-onnx` stays because speech/audition.py still
+    # renders Kokoro voices to compare against.
     "kokoro-onnx>=0.4",
+    "piper-tts>=1.6",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "soundfile>=0.12",
+    "kanade-tokenizer @ git+https://github.com/frothywater/kanade-tokenizer",
 ]
 
 [dependency-groups]
