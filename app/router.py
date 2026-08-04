@@ -644,20 +644,35 @@ def route(text: str, tz_name: str, reports=(), projects=()) -> tuple[str, dict]:
 
 
 def answer(question: str, context: str, tz_name: str) -> str:
-    """Second hop for `query`: turn rows into one spoken sentence."""
+    """Second hop for `query`: turn rows into one spoken sentence.
+
+    The instruction not to mention the context is load-bearing, and so is the
+    absence of a `Data:` label on the user turn. The first version said
+    "answer using only the data provided" over a message beginning "Data:",
+    and the model dutifully echoed both: real answers opened "Based on the
+    data provided, you're in the consideration phase of…". Grounding it and
+    telling it where the grounding came from are different instructions, and
+    only the first one is wanted out loud.
+    """
     response = _client().messages.create(
         model=MODEL,
         max_tokens=512,
         system=(
-            "Answer the question using only the data provided. One or two "
-            "sentences, spoken aloud to someone who cannot see a screen: no "
-            "markdown, no lists, no emoji, no ISO timestamps — say times the "
-            "way a person would. If the data does not contain the answer, say "
-            f"so plainly. Current time: {timeutil.now(tz_name).isoformat(timespec='minutes')}"
+            "You are a personal assistant answering your user out loud. "
+            "Everything you know is below. Do not invent facts that are not "
+            "there, but do summarise it and draw the obvious conclusion from "
+            "it — a note saying what they were last thinking about is an "
+            "answer to where they are. Only say you don't know when nothing "
+            "below bears on the question.\n"
+            "Never mention where it came from. No 'based on the data "
+            "provided', no 'the data shows', no 'according to your notes', no "
+            "'it looks like'. Say the answer directly, as something you know.\n"
+            "One or two sentences, spoken to someone who cannot see a screen: "
+            "no markdown, no lists, no emoji, no ISO timestamps — say times "
+            "the way a person would. Current time: "
+            f"{timeutil.now(tz_name).isoformat(timespec='minutes')}"
         ),
-        messages=[
-            {"role": "user", "content": f"Data:\n{context}\n\nQuestion: {question}"}
-        ],
+        messages=[{"role": "user", "content": f"{context}\n\nQuestion: {question}"}],
     )
     usage.record(response.usage)
     return "".join(b.text for b in response.content if b.type == "text").strip()
