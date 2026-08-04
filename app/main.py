@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
+from gratitude import entries as gratitude_entries
 from pantry import images, inventory, receipts
 from speech import synth
 
@@ -703,6 +704,32 @@ def resolve_shopping_entry(entry_id: int, purchased: bool = True) -> dict:
 
 
 # ── dashboard reads ───────────────────────────────────────
+
+
+@app.get("/gratitude", dependencies=[Depends(require_token)])
+def gratitude(days: int = 30, tz: str | None = None) -> dict:
+    """Today's three, the streak, and the days behind it.
+
+    Today is served separately from `days` rather than as the first group: the
+    card and the history render differently, and merging them would make the
+    view re-derive which group is 'now'.
+    """
+    days = max(1, min(days, 366))
+    tz_name = tz or config.DEFAULT_TZ
+    conn = connect()
+    try:
+        on = gratitude_entries.day_for(timeutil.now(tz_name))
+        return {
+            "today": {
+                "on": on,
+                "target": gratitude_entries.TARGET,
+                "entries": gratitude_entries.for_day(conn, on),
+            },
+            "streak": gratitude_entries.streak(conn, tz_name),
+            "days": gratitude_entries.recent(conn, tz_name, days),
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/activity", dependencies=[Depends(require_token)])
