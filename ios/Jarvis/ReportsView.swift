@@ -243,16 +243,14 @@ struct ReportDetailView: View {
                         }
                     }
 
-                    if job.sessionId != nil {
-                        // Follow-ups resume this session, which is why "what
-                        // about the second one" works across two utterances.
-                        Text("Follow-ups resume this session.")
-                            .font(Theme.sans(12))
-                            .foregroundStyle(Theme.text3)
-                            .padding(.top, 4)
-                            .overlay(alignment: .top) {
-                                Theme.border.frame(height: 1).offset(y: -8)
-                            }
+                    ReplyBox(
+                        jobID: jobID,
+                        isLive: job.status == "queued" || job.status == "running",
+                        onSent: { Task { await load() } }
+                    )
+                    .padding(.top, 4)
+                    .overlay(alignment: .top) {
+                        Theme.border.frame(height: 1).offset(y: -8)
                     }
                 } else if error == nil {
                     ProgressView().tint(Theme.accent)
@@ -265,6 +263,16 @@ struct ReportDetailView: View {
         .navigationTitle("Report \(jobID)")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        // A replied-to report reworks itself while you're looking at it. Same
+        // 5s cadence as the list, and it idles as soon as the job settles.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let status = job?.status, status == "queued" || status == "running"
+                else { continue }
+                await load()
+            }
+        }
     }
 
     /// Raw is a toggle rather than a setting, and Copy exists because a report

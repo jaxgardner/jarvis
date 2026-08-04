@@ -494,6 +494,13 @@ final class JarvisAPI: ObservableObject {
         try await send("/jobs/\(id)")
     }
 
+    /// Answer a report that asked you something. The job resumes its session
+    /// and rewrites its report; the returned detail is the queued job.
+    @discardableResult
+    func reply(toJob id: Int, text: String) async throws -> JobDetail {
+        try await send("/jobs/\(id)/reply", method: "POST", body: ["text": text])
+    }
+
     func health() async throws -> HealthResponse {
         try await send("/health")
     }
