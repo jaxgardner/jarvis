@@ -17,9 +17,6 @@ struct ProposalsView: View {
     @EnvironmentObject private var api: JarvisAPI
     @EnvironmentObject private var toasts: ToastCenter
 
-    /// Owned by the root so the tab badge stays honest from any screen.
-    @Binding var pendingCount: Int
-
     @State private var proposals: [ProposalsResponse.Proposal]?
     @State private var error: String?
     @State private var isLoading = false
@@ -102,9 +99,7 @@ struct ProposalsView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            let fetched = try await api.proposals().proposals
-            proposals = fetched
-            pendingCount = fetched.count
+            proposals = try await api.proposals().proposals
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -124,7 +119,6 @@ struct ProposalsView: View {
             withAnimation(.easeOut(duration: 0.2)) {
                 proposals?.removeAll { $0.id == proposal.id }
             }
-            pendingCount = proposals?.count ?? 0
         } catch {
             self.error = error.localizedDescription
         }

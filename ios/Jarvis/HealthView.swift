@@ -6,12 +6,16 @@ import SwiftUI
 /// because a latency figure with no target next to it is just trivia — and
 /// `CLAUDE.md` is unambiguous that p95 over 2s is a bug, not a data point.
 ///
-/// This is also the door to the four surfaces that have no home of their own:
-/// ingest health, the inbox, enrolled devices, and the activity log. They live
-/// behind Health rather than as tabs because you go looking for them when
-/// something feels wrong, which is the same reason you open this screen at all
-/// — and Activity is exactly that: you want it when something you said came
-/// out wrong.
+/// This is also the door to the surfaces that have no home of their own:
+/// ingest health, the inbox, enrolled devices, the activity log, and the email
+/// review queue. They live behind Health rather than as tabs because you go
+/// looking for them when something feels wrong, which is the same reason you
+/// open this screen at all — and Activity is exactly that: you want it when
+/// something you said came out wrong.
+///
+/// Review lost its tab because email extraction is not currently producing
+/// proposals worth reviewing. The screen still works; it is one row away
+/// rather than a permanent seventh tab advertising an empty queue.
 struct HealthView: View {
     @EnvironmentObject private var api: JarvisAPI
 
@@ -230,6 +234,7 @@ struct HealthView: View {
             NavRow(title: "Inbox") { InboxView() }
             NavRow(title: "Devices") { DevicesView() }
             NavRow(title: "Activity") { ActivityView() }
+            NavRow(title: "Review") { ProposalsView() }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {

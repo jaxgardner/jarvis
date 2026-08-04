@@ -164,7 +164,13 @@ is one table, one router tool, one sweep and one screen.
   branch is surface area bought for a question nobody has asked.
 - **Activity moved behind Health** to free the tab. Health's nav group was
   already "the surfaces with no home of their own", and the activity log is
-  one: you want it when something you said came out wrong.
+  one: you want it when something you said came out wrong. **Review followed
+  it** — email extraction is not currently producing proposals worth
+  reviewing, and a permanent tab advertising an empty queue is worse than a
+  row you can find. Six tabs, not seven: "Gratitude" wrapped its last letter
+  at a seventh of the bar, so the tab reads "Grateful" while the screen is
+  still called Gratitude, and the label is `lineLimit(1)` so no future one can
+  wrap the whole bar taller.
 
 ## Voice
 

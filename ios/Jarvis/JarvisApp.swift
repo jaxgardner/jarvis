@@ -32,16 +32,18 @@ struct JarvisApp: App {
 /// treatment, the mono labels and the pending-proposal badge are all part of
 /// the design language, and the stock bar can carry none of them.
 enum JarvisTab: String, CaseIterable, Hashable {
-    case talk, agenda, pantry, gratitude, reports, proposals, health
+    case talk, agenda, pantry, gratitude, reports, health
 
     var label: String {
         switch self {
         case .talk: return "Talk"
         case .agenda: return "Agenda"
         case .pantry: return "Pantry"
-        case .gratitude: return "Gratitude"
+        // "Gratitude" is one character too wide for a sixth of the bar and
+        // wrapped its final letter onto a second line. The screen is still
+        // called Gratitude; only the tab is abbreviated.
+        case .gratitude: return "Grateful"
         case .reports: return "Reports"
-        case .proposals: return "Review"
         case .health: return "Health"
         }
     }
@@ -58,7 +60,6 @@ enum JarvisTab: String, CaseIterable, Hashable {
         case .pantry: return "refrigerator"
         case .gratitude: return "sparkles"
         case .reports: return "doc.text.magnifyingglass"
-        case .proposals: return "tray.full"
         case .health: return "heart.text.square"
         }
     }
@@ -74,9 +75,6 @@ struct RootView: View {
     @ObservedObject private var router = LaunchRouter.shared
 
     @State private var tab: JarvisTab = .talk
-    /// Kept at the root so the tab badge is current wherever you are — an
-    /// unreviewed proposal is the one thing in the app with a deadline.
-    @State private var pendingProposals = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -89,7 +87,6 @@ struct RootView: View {
                 case .pantry: PantryView()
                 case .gratitude: GratitudeView()
                 case .reports: ReportsView()
-                case .proposals: ProposalsView(pendingCount: $pendingProposals)
                 case .health: HealthView()
                 }
             }
@@ -105,7 +102,6 @@ struct RootView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .task { await refreshBadge() }
         // A "Job finished" notification should land on the report, not on
         // whichever tab happened to be showing.
         .onChange(of: router.pendingJobID) { _, id in
@@ -149,16 +145,12 @@ struct RootView: View {
                     VStack(spacing: 4) {
                         Image(systemName: item.symbol)
                             .font(.system(size: 15))
-                            .overlay(alignment: .topTrailing) {
-                                if item == .proposals && pendingProposals > 0 {
-                                    Circle()
-                                        .fill(Theme.warning)
-                                        .frame(width: 6, height: 6)
-                                        .offset(x: 6, y: -2)
-                                }
-                            }
+                        // Truncating is a better failure than wrapping: a
+                        // two-line label makes the whole bar taller and
+                        // shunts every other tab's icon up with it.
                         Text(item.label)
                             .font(Theme.mono(9.5))
+                            .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)
@@ -191,9 +183,6 @@ struct RootView: View {
         .animation(.easeOut(duration: 0.15), value: tab)
     }
 
-    private func refreshBadge() async {
-        pendingProposals = (try? await api.proposals().proposals.count) ?? 0
-    }
 }
 
 /// The token was rejected. Nothing else in the app can work, so this takes the
