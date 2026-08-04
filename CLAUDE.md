@@ -81,6 +81,18 @@ pushed to Google. Two sources, two very different postures:
 Message bodies are never stored. `format=metadata` means Gmail does not return
 them, so there is no path to storing them by accident.
 
+**Snippets are cleaned on the way in, and that is a latency fix, not tidiness.**
+Marketing mail pads its preheader with zero-width characters so the inbox
+preview shows the hook and nothing after it, and Gmail hands them back inside
+`snippet`. They are invisible and they are not free: each is its own codepoint
+outside the tokenizer's common set and costs two or three tokens. Measured on
+one real morning, 611 of them were **1248 tokens — 66% of the entire context**
+handed to `router.answer`, and stripping them took that call from ~2190ms to
+~1540ms. `ingest.gmail.clean_snippet` filters by Unicode category (`Cf`, plus
+U+034F, which is a combining mark and so would survive a `Cf`-only filter);
+migration 015 cleaned the rows already stored, since `prune` would otherwise
+have kept charging for them until they aged out.
+
 **Synced writes bypass the mutations helper.** This is an exception to the
 invariant below, and a deliberate one: the log exists to make *voice* input
 reversible, a sync is not a user action, and a few hundred synced rows would

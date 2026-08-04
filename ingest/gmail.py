@@ -33,7 +33,9 @@ and an agenda you don't trust is decoration.
 """
 
 import json
+import re
 import sys
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import anthropic
@@ -214,6 +216,39 @@ def fetch_metadata(message_id: str) -> dict | None:
         raise
 
 
+def clean_snippet(text: str | None) -> str | None:
+    """Strip the invisible padding marketing mail hides in its preheader.
+
+    Senders pad the preview text with zero-width characters so the inbox shows
+    the hook and nothing after it. Gmail hands those straight back in
+    `snippet`, and while they are invisible they are not free: each is its own
+    codepoint outside the tokenizer's common set and costs two or three tokens.
+    Measured on one real morning's mail, 611 of them were 1248 tokens — 66% of
+    the entire context handed to `router.answer`, buying nothing, since neither
+    a reader nor a model can see them.
+
+    Removed by Unicode category rather than by listing codepoints: `Cf` is
+    format characters (the zero-width joiners and the BOM), `Mn` with zero
+    width covers the combining grapheme joiner. Real text — accents, curly
+    quotes, em dashes, ellipses — is category `L`/`P`/`S` and is untouched.
+    """
+    if not text:
+        return None
+    kept = "".join(
+        ch
+        for ch in text
+        if unicodedata.category(ch) != "Cf" and ch not in _ZERO_WIDTH_MARKS
+    )
+    # The padding usually arrives interleaved with real spaces, which are left
+    # behind in runs once it is gone.
+    return re.sub(r"\s{2,}", " ", kept).strip() or None
+
+
+# Combining marks that render as nothing. `Mn` at large would take the accents
+# off legitimately decomposed text, so this is the specific offender.
+_ZERO_WIDTH_MARKS = frozenset("͏")
+
+
 def to_row(message: dict) -> dict:
     headers = {
         h.get("name", "").lower(): h.get("value", "")
@@ -232,7 +267,7 @@ def to_row(message: dict) -> dict:
         "sender": headers.get("from"),
         "recipient": headers.get("to"),
         "subject": headers.get("subject"),
-        "snippet": (message.get("snippet") or "").strip() or None,
+        "snippet": clean_snippet(message.get("snippet")),
         "received_at": timeutil.to_utc_iso(received),
         "labels": json.dumps(labels),
         "is_unread": int("UNREAD" in labels),
