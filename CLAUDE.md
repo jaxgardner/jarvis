@@ -283,10 +283,42 @@ many times you answer it.
   agent must remember to emit, no classifier call on every job. Every finished
   report can be replied to. You find out by reading it, which you were doing
   anyway.
-- **A spoken follow-up takes the same path.** `escalate(is_follow_up)` resumes
-  the most recent finished job in place rather than inserting a row that
-  copies its session. It used to fork; two mechanics meant the Reports list
-  held two kinds of thing depending on how you happened to speak.
+- **A spoken answer names its report.** The router's system prompt carries a
+  `REPORTS` block — the last ten finished jobs as `id  original ask` — and
+  `escalate` returns a `job_id`, which routes to the same
+  `handlers.reply_to_job` the reply box calls. It briefly used an
+  `is_follow_up` boolean resolving to "the most recent finished job", which was
+  right often enough to feel fine and wrong in the case you would care about:
+  answering this morning's report after asking for something else at lunch.
+  Naming beats guessing, so the boolean and `resume_latest_job` were both
+  deleted rather than kept alongside.
+- **Answering a report that is already running says so.** `reply_to_job`
+  returns `live`, and the templated reply is "That one's still working. I'll
+  leave it be." Quietly starting a second piece of work you did not ask for is
+  the failure this avoids.
+- **`query` can read a report too.** With a `job_id` it adds one
+  `REPORT (<ask>): <summary>` line beside the `NOTE:` and `EMAIL:` lines, and
+  `router.answer` speaks from it — so reports are another thing the assistant
+  knows about rather than a mode it enters, and one question can draw on a
+  report and your mail together.
+- **Voice reads the summary, not the report.** `jobs.summary` is written by one
+  Haiku call in `app/reports.py` when a run finishes. A report runs to tens of
+  kilobytes and would spend the whole context and latency budget on a question
+  a sentence answers. **The accepted cost: a question about a detail the
+  summary dropped is answered "it didn't say"** — the detail is in `result`, on
+  screen. NULL is normal and permanent, not pending; `query` falls back to the
+  first 1500 characters of `result`, which is why there was no backfill.
+- **The summary is the one metered call in the deep path.** Everything else
+  there rides the Claude Code subscription; this is Haiku against a few
+  thousand tokens, billed to API credit. Fractions of a cent per job and deep
+  jobs are rare, but it is a real exception to how the two tiers are funded.
+  It stays out of `/metrics`, which is per-utterance, and a summary has no
+  utterance behind it. It cannot fail a job: `reports.summarize` swallows its
+  own errors and `worker._store_summary` swallows them again, because the
+  report is already saved and the push is already owed.
+- **Ten reports is the reach of voice.** Older ones are unreachable by voice
+  and still repliable on the Reports screen. It is one constant,
+  `handlers.recent_reports`'s `limit`.
 - **An expired Claude Code session is a normal failure.** `--resume` fails, the
   run retries and lands in `failed` with the CLI's message on the detail view.
   Ask again from scratch. Tracking session lifetime we do not control is not
@@ -336,7 +368,9 @@ and those need different fixes.
 `/metrics` takes `?days=N` and includes a `spend` block — token counts are
 stored on `utterances` and costed at read time, so a price change re-costs
 history instead of freezing the old rate. Only the fast path is counted; the
-deep path runs on the Claude Code subscription, not API credits.
+deep path runs on the Claude Code subscription, not API credits — with one
+exception, the per-report summary call described under "Replying to a
+report".
 
 Auth is a bearer token: either `JARVIS_TOKEN` (shared — the Shortcut uses it,
 and it is what enrolls a device) or a per-device token minted by `POST
@@ -354,9 +388,9 @@ the tool choice; there is no separate classifier model.
 | `add_event` | `title`, `starts_at`, `ends_at?`, `location?`, `all_day?` |
 | `add_reminder` | `body`, `fire_at`, `recurrence?` |
 | `add_note` | `body`, `tags?`, `project?`, `person?` |
-| `query` | `question`, `window_days?` |
+| `query` | `question`, `window_days?`, `job_id?` |
 | `undo_last` | — |
-| `escalate` | `restated_task` — routes to the deep path |
+| `escalate` | `restated_task`, `job_id?` — routes to the deep path |
 
 The system prompt must include current datetime with offset, timezone name,
 day of week, and an instruction to resolve all relative times to absolute
