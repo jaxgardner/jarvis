@@ -177,10 +177,19 @@ def test_detail_speaks_its_own_dates(conn):
         (project_id,),
     )
 
+    import re
+
+    # A pattern rather than a bare "T": "Tuesday, August 11 at 3 PM" is a
+    # correctly spoken date that happens to start with the same letter.
+    iso = re.compile(r"\d{4}-\d{2}-\d{2}T")
+
     detail = store.detail(conn, project_id, "America/Denver")
-    assert "when" in detail["events"][0]
-    assert "T" not in detail["events"][0]["when"]
-    assert "when" in detail["notes"][0]
+    for section, row in (
+        ("events", detail["events"][0]),
+        ("notes", detail["notes"][0]),
+    ):
+        assert "when" in row, section
+        assert not iso.search(row["when"]), f"{section} leaked an ISO stamp: {row['when']}"
 
 
 def test_detail_is_none_for_a_project_that_does_not_exist(conn):

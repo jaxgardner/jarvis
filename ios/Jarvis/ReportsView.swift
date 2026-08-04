@@ -13,6 +13,12 @@ import SwiftUI
 /// polls while anything is in flight and says so with a pulsing dot rather than
 /// a spinner that would imply the *list* is loading.
 struct ReportsView: View {
+    /// Set only when this is presented modally — by a tapped "Job finished"
+    /// notification, which must land on the report regardless of which tab is
+    /// showing. Nil when reached through Health's nav group, which has a back
+    /// button of its own.
+    var onDone: (() -> Void)?
+
     @EnvironmentObject private var api: JarvisAPI
     @ObservedObject private var router = LaunchRouter.shared
 
@@ -31,7 +37,13 @@ struct ReportsView: View {
                 ScreenHeader(
                     title: "Reports",
                     kicker: hasLiveJob ? "Deep path · working" : "Deep path"
-                )
+                ) {
+                    if let onDone {
+                        Button("Done", action: onDone)
+                            .font(Theme.sans(14, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
                 content
             }
             .jarvisBackground()
