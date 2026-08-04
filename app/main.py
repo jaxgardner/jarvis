@@ -1052,6 +1052,31 @@ def metrics(days: int = 1) -> dict:
             else:
                 out[route_name] = {"count": 0}
 
+        # The turn, beside the endpoint. Counted only over utterances that
+        # reported one — a Shortcut has no microphone, and folding its
+        # silence in as a zero would report a headline number nobody
+        # experienced.
+        turns = [
+            r["turn_ms"]
+            for r in conn.execute(
+                """SELECT turn_ms FROM utterances
+                     WHERE turn_ms IS NOT NULL
+                       AND created_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now',?)
+                     ORDER BY turn_ms""",
+                (window,),
+            ).fetchall()
+        ]
+        out["turn"] = (
+            {
+                "count": len(turns),
+                "p50": turns[len(turns) // 2],
+                "p95": turns[min(len(turns) - 1, int(len(turns) * 0.95))],
+                "max": turns[-1],
+            }
+            if turns
+            else {"count": 0}
+        )
+
         out["spend"] = _spend(conn, window)
         return out
     finally:

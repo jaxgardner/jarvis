@@ -92,3 +92,45 @@ def test_unknown_id_is_not_an_error(client):
     already spoken by the time it sends this; nothing it hears back matters."""
     resp = client.post("/turns", json={"utterance_id": 999999, "turn_ms": 1000})
     assert resp.status_code == 204
+
+
+def _stored_turns() -> list[int]:
+    """Every turn already in the database.
+
+    The module-scoped client shares one database across the file, and
+    test_turn_is_recorded above has already written one. Asserting an absolute
+    count here would encode the number of tests before this one rather than
+    anything about /metrics, so the expectation is built from what is actually
+    stored — which still pins the percentile arithmetic exactly.
+    """
+    conn = connect()
+    try:
+        return [
+            r["turn_ms"]
+            for r in conn.execute(
+                "SELECT turn_ms FROM utterances WHERE turn_ms IS NOT NULL"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def test_metrics_reports_turn(client):
+    expected = sorted(_stored_turns() + [1000, 1500, 2000])
+    for ms in (1000, 1500, 2000):
+        client.post("/turns", json={"utterance_id": _utterance(client), "turn_ms": ms})
+
+    body = client.get("/metrics").json()
+    assert body["turn"]["count"] == len(expected)
+    assert body["turn"]["p50"] == expected[len(expected) // 2]
+    assert body["turn"]["max"] == expected[-1]
+
+
+def test_metrics_turn_counts_only_reported(client):
+    """Counted only over utterances that reported one. A Shortcut has no
+    microphone, and folding its silence in as a zero would report a headline
+    number nobody experienced."""
+    before = client.get("/metrics").json()["turn"]["count"]
+    _utterance(client)  # written, never reported
+    after = client.get("/metrics").json()["turn"]["count"]
+    assert after == before
