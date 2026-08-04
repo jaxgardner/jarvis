@@ -26,6 +26,7 @@ wrong, say so — don't silently do it differently.
     mcp/         jarvis-mcp stdio server
     worker/      claude -p job runner
     scheduler/   reminder firer, no LLM
+    gratitude/   three things a day: entries, and the evening prompt
     ingest/      Google Calendar + Gmail importers
     migrations/  numbered .sql, applied by migrate.py
     tests/
@@ -118,6 +119,52 @@ Things worth not rediscovering:
 - `PANTRY_VISION_MODEL` defaults to `claude-haiku-4-5`. Thermal receipt print
   is hard OCR; if reviewing is tedious, move it to Sonnet in `.env` rather
   than touching a code path.
+
+## Gratitude
+
+Three things a day, prompted at 10pm and spoken into Talk. The whole feature
+is one table, one router tool, one sweep and one screen.
+
+- **The prompt is a scheduler sweep, not a `reminders` row** — the same call
+  the pantry expiry sweep made, for the same reasons. A reminder shows up in
+  `/agenda` among your appointments, and one scheduled ahead of time would
+  still fire after you logged your three at eight. The sweep reads
+  `gratitude_entries` live, so a finished day cannot notify.
+- **The day runs to 4am** (`GRATITUDE_DAY_START`). A 10pm prompt answered at
+  half past midnight belongs to the day you were thinking about; under a
+  midnight rule it opens a new day and leaves the old one looking skipped,
+  which is the streak breaking for doing the thing. `entries.day_for` is the
+  only place the boundary is decided, and every `entry_on` comes through it.
+  The push window is separate and is real clock time, so nothing fires at
+  00:30.
+- **Three is a target, not a limit.** A fourth thing is stored and shown and
+  the day still reads complete. Refusing gratitude because a counter is full
+  is the pedantry `consume_item` already declines.
+- **An incomplete today does not break the streak.** Today at zero is a day in
+  progress; the streak ends at the first *finished* day that fell short. A
+  number that turns into a reproach at 6pm is a number that gets muted along
+  with the notification.
+- **One push an evening, and no catch-up.** Deduped through a `heartbeats` row
+  named `gratitude` whose `detail` holds the day it last pushed for — the same
+  use `_selfcheck` already makes of that table. Nothing is stamped unless the
+  push landed. A Mini asleep all evening produces no push and nothing the next
+  morning: a gratitude prompt at 8am is about a day that is already gone.
+- **Capture is voice-only.** The page is read-only and there is no POST. Talk
+  already works in the dark with your eyes shut, which is when this gets
+  answered; a text field on the page would be a second way to write the same
+  rows.
+- **The router needs telling that a note is a note.** The first version of
+  `log_gratitude`'s description triggered on pleasant *content*, so "note that
+  my sister called" became a gratitude. It now says the user must actually say
+  they are grateful, and that an instruction to note something is always
+  `add_note` however nice the thing is. `test_gratitude_is_not_a_note` in the
+  live router set is what caught it and is what will catch it again.
+- **`query` knows nothing about gratitude.** Reading the page is the only way
+  to look back. Every misroute starts in the router, and a `kind='gratitude'`
+  branch is surface area bought for a question nobody has asked.
+- **Activity moved behind Health** to free the tab. Health's nav group was
+  already "the surfaces with no home of their own", and the activity log is
+  one: you want it when something you said came out wrong.
 
 ## Voice
 
@@ -354,6 +401,7 @@ engine — no markdown, no lists, no emoji.
 | `GET /devices`, `DELETE /devices/{id}` | List, and revoke a lost one |
 | `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
 | `GET /activity` | Utterances + what each one changed; drives swipe-to-undo |
+| `GET /gratitude` | Today's three, the streak, and the days behind it |
 | `GET /jobs` | Deep-path history (results truncated; full text on `/jobs/{id}`) |
 | `POST /jobs/{id}/reply` | Answer a report that asked you something; resumes it in place |
 | `GET /proposals` | Pending email extractions awaiting review |
@@ -388,6 +436,7 @@ the tool choice; there is no separate classifier model.
 | `add_event` | `title`, `starts_at`, `ends_at?`, `location?`, `all_day?` |
 | `add_reminder` | `body`, `fire_at`, `recurrence?` |
 | `add_note` | `body`, `tags?`, `project?`, `person?` |
+| `log_gratitude` | `items[]` |
 | `query` | `question`, `window_days?`, `job_id?` |
 | `undo_last` | — |
 | `escalate` | `restated_task`, `job_id?` — routes to the deep path |
@@ -412,7 +461,7 @@ Deterministic, and it saves a round trip.
   `test_mcp_server_starts_from_outside_the_repo`.
 - **Prompt caching does not fire here.** Haiku 4.5's minimum cacheable prefix
   is 4096 tokens. Measured with `count_tokens`, the router prompt plus its
-  eleven tool definitions is **3322** — closer than it sounds, but under.
+  twelve tool definitions is **3681** — closer than it sounds, but under.
   Keep the prompt byte-stable anyway (free, and matters if it grows), but
   don't budget for the savings. Padding the prefix past 4096 on purpose would
   make the cache fire; it was measured and rejected, because the upside is
