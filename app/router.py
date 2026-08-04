@@ -39,9 +39,16 @@ def cost_usd(input_tokens: int, output_tokens: int) -> float:
 _PROJECT_ID = {
     "type": "integer",
     "description": (
-        "The id of a project from PROJECTS, when the user files this under "
-        "one — 'for the lettuce project, …'. Omit otherwise. Use an id only "
-        "if it appears in PROJECTS."
+        "The id of a project from PROJECTS, ONLY when the user names that "
+        "project in this sentence: 'for the lettuce project, …', 'add this "
+        "to the remodel', 'on the greenhouse, …'.\n"
+        "Never infer a project from subject matter. If the user did not say "
+        "which project this belongs to, omit this parameter — even when the "
+        "content is obviously related to one. A note about a broken "
+        "thermostat is NOT filed under a gardening project just because both "
+        "concern plants. Being unfiled is correct and normal; guessing wrong "
+        "puts the thought somewhere the user will not look for it.\n"
+        "Use an id only if it appears in PROJECTS."
     ),
 }
 
@@ -421,6 +428,24 @@ TOOLS: list[dict] = [
         },
     },
 ]
+
+# No cache_control here, and the reason is measured rather than assumed.
+#
+# The cacheable prefix is the tools block and nothing else: the cache order is
+# tools, then system, then messages, and the system prompt carries the current
+# datetime on its third line, so everything from there on differs every call.
+#
+# The tools measure 4199 tokens against Haiku 4.5's documented 4096 floor,
+# which reads like caching should fire. **It does not.** Probed directly —
+# two identical requests, `cache_creation_input_tokens` and
+# `cache_read_input_tokens` both 0 — while the same probe with the tools
+# padded to 7240 tokens cached 6912 of them immediately. So the cache measures
+# a smaller prefix than `count_tokens` reports, and 103 tokens of headroom is
+# not enough. A marker here would be a silent no-op that reads as a working
+# optimization.
+#
+# `tests/test_router_prompt.py` asserts this empirically: declare
+# cache_control and it must produce an actual cache read.
 
 # Byte-stable except for the datetime block, which necessarily varies.
 _SYSTEM = """\
