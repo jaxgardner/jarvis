@@ -28,6 +28,7 @@ wrong, say so — don't silently do it differently.
     scheduler/   reminder firer, no LLM
     gratitude/   three things a day: entries, and the evening prompt
     brief/       the 7am morning brief: mail summary, and the job
+    projects/    named spaces: the queries, and a directory per project
     ingest/      Google Calendar + Gmail importers
     migrations/  numbered .sql, applied by migrate.py
     tests/
@@ -40,7 +41,9 @@ committed and survives a re-clone.
 
 See `migrations/001_init.sql` — it is the authoritative copy, applied in full
 up front. Domain tables: `events`, `reminders`, `people`, `projects`,
-`notes`. Operational: `utterances`, `mutations`, `jobs`. Search: `notes_fts`
+`project_links`, `notes`. `events`, `reminders` and `jobs` each carry a
+nullable `project_id` (migration 014).
+Operational: `utterances`, `mutations`, `jobs`. Search: `notes_fts`
 (external-content FTS5 + three sync triggers). Ingestion:
 `sync_state`, `proposals`, `email_messages` + `email_fts`.
 
@@ -217,7 +220,8 @@ today" answers from that plus live data.
 
 `ingest.gmail`'s pass 2 no longer runs on a schedule — `--proposals` is the
 only way in and nothing passes it. The table, endpoints and screen all remain;
-Review sits in Health's nav group.
+Review sits in Health's nav group, alongside Activity and — since Projects took
+the sixth tab — Reports.
 
 Two reasons, and the second is why the code is still there. The brief now
 tells you a dentist confirmation arrived and "add dentist Thursday at 3"
@@ -231,6 +235,74 @@ matches, 100 candidates, **intersection zero**. Nothing is examined, so
 zero rows of any status and the log read `examined=0` from the day it shipped.
 Re-enabling means fixing that first — filter by the narrow ids inside the SQL
 so the `LIMIT` applies to matching messages.
+
+## Projects
+
+A named space collecting the notes, reports, dated items, links and
+agent-written files belonging to one thing you are working on. Started by
+voice, optionally with research attached; added to by naming it; read on a
+screen or by asking where you are.
+
+The `projects` table has existed since migration 001 and nothing ever wrote to
+it. 014 gave it the columns a real project needs and hung the rest of the
+domain off it.
+
+- **Attachment is by naming, never by inference.** A PROJECTS block in the
+  router prompt lists active projects as `id  name`, and every write tool takes
+  an optional `project_id` drawn from it. Nothing is attached because its
+  content looked related, and there is no sticky "current project" a later
+  utterance inherits. The same conclusion `escalate`'s `job_id` reached when
+  `is_follow_up` was deleted: naming beats guessing.
+- **`add_note`'s free-text `project` is gone.** It used to create the project
+  when the name was new, which meant a misheard word spawned a ghost row that
+  nothing could merge away. An id the router invents rather than reads files
+  the row *nowhere* — `handlers._project_ref` checks it exists. Keeping the
+  note and dropping the association is the right half to lose.
+- **No status is stored.** There is no "state of play" paragraph. The screen
+  shows the rows and `query(kind='project')` gathers them live at the moment
+  you ask. This is the brief's rule applied where there is no irreducible part
+  at all: storing one would mean a metered call per note and a paragraph that
+  can disagree with the rows beneath it.
+- **`start_project` exists because one sentence does two things.** "Start a
+  project on X and research it" is one utterance and `tool_choice: any` emits
+  one call, so the tool takes an optional `research_task` and enqueues a job
+  under the new project. It lives in `main.py` beside `escalate` rather than in
+  `FAST_HANDLERS` — both may enqueue a job and so must shape the response
+  themselves. `DEEP_TOOLS` is the set.
+- **Starting a project twice is one project.** Idempotent by name, because
+  voice is lossy enough without a near-duplicate per repetition. Route is
+  `deep` only when research came with it; a bare creation is a fast-path write
+  and reporting it as deep would have the phone poll a job that does not exist.
+- **`slug` is stored, not derived from `name`.** The working directory is
+  `work/projects/<id>-<slug>/` and reports quote paths inside it, so a rename
+  must not move the directory. `PATCH /projects/{id}` deliberately leaves the
+  slug alone.
+- **`ON DELETE SET NULL` on events, reminders and jobs**, the call 007 made for
+  `proposals.event_id`: deleting a project must not take a dentist appointment
+  off the calendar. `notes.project_id` keeps its no-action FK, so **a project
+  with notes cannot be deleted at all** — the notes are the point of it. You
+  mark it done.
+- **The agent reads a project and never writes to it.** `project_context` is
+  read-only and there is no MCP tool that files notes or links back. Sources it
+  found are in the report text. Same human-disposes rule as `proposals` and
+  `receipts`.
+- **A project's deep job runs in the project's own directory** and is told to
+  call `project_context` first. Research started three weeks in should see the
+  three weeks of thinking, not just the sentence that kicked it off. A *reply*
+  gets no preamble — the session it resumes already has one.
+- **Status changes are screen-only.** A twelfth router tool for a
+  once-per-project action taken with your eyes open is prompt budget and
+  misroute surface spent badly.
+- **Links are typed, not spoken**, because you cannot say a URL. It is the one
+  input on the screen, and it goes through the mutations helper like every
+  other human action.
+- **Projects took the sixth tab and Reports moved into Health's nav group**,
+  beside Activity and Review. Every project screen lists its own reports with
+  the same `ReplyBox`, so what is left on the standalone screen is the loose
+  ones and the old ones. A "Job finished" push can no longer switch to a tab
+  that does not exist, so `RootView` **presents** `ReportsView` — which reads
+  the pending id itself and pushes straight to the report, which is what the
+  old tab switch was there to do.
 
 ## Voice
 
@@ -468,6 +540,11 @@ engine — no markdown, no lists, no emoji.
 | `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
 | `GET /activity` | Utterances + what each one changed; drives swipe-to-undo |
 | `GET /gratitude` | Today's three, the streak, and the days behind it |
+| `GET /projects` | Every project with its counts and last activity |
+| `GET /projects/{id}` | One project: notes, reports, dated items, links, files |
+| `GET /projects/{id}/files/{name}` | One artifact the agent wrote. Escapes are 404 |
+| `POST /projects/{id}/links` | Paste a URL. Through `mutations` — a human tapped it |
+| `PATCH /projects/{id}` | Rename, or move between active/paused/done. Slug unchanged |
 | `GET /jobs` | Deep-path history (results truncated; full text on `/jobs/{id}`) |
 | `POST /jobs/{id}/reply` | Answer a report that asked you something; resumes it in place |
 | `GET /proposals` | Pending email extractions awaiting review |
@@ -499,13 +576,19 @@ the tool choice; there is no separate classifier model.
 
 | Tool | Parameters |
 | :-- | :-- |
-| `add_event` | `title`, `starts_at`, `ends_at?`, `location?`, `all_day?` |
-| `add_reminder` | `body`, `fire_at`, `recurrence?` |
-| `add_note` | `body`, `tags?`, `project?`, `person?` |
+| `add_event` | `title`, `starts_at`, `ends_at?`, `location?`, `all_day?`, `project_id?` |
+| `add_reminder` | `body`, `fire_at`, `recurrence?`, `project_id?` |
+| `add_note` | `body`, `tags?`, `project_id?`, `person?` |
+| `start_project` | `name`, `description?`, `research_task?` — deep when research came with it |
 | `log_gratitude` | `items[]` |
-| `query` | `question`, `window_days?`, `job_id?` |
+| `query` | `question`, `kind`, `window_days?`, `job_id?`, `project_id?` |
 | `undo_last` | — |
-| `escalate` | `restated_task`, `job_id?` — routes to the deep path |
+| `escalate` | `restated_task`, `job_id?`, `project_id?` — routes to the deep path |
+
+`project_id` is one shared property object referenced by every tool that can
+file something, not five copies: they must read identically, and a description
+that drifts on one tool is a routing bug you find months later in exactly one
+phrasing.
 
 The system prompt must include current datetime with offset, timezone name,
 day of week, and an instruction to resolve all relative times to absolute
@@ -525,14 +608,25 @@ Deterministic, and it saves a round trip.
   so the agent just has no tools and the job *succeeds*, answering that it has
   no way to search your mail. Covered by
   `test_mcp_server_starts_from_outside_the_repo`.
-- **Prompt caching does not fire here.** Haiku 4.5's minimum cacheable prefix
-  is 4096 tokens. Measured with `count_tokens`, the router prompt plus its
-  twelve tool definitions is **3767** — closer than it sounds, but under.
-  Keep the prompt byte-stable anyway (free, and matters if it grows), but
-  don't budget for the savings. Padding the prefix past 4096 on purpose would
-  make the cache fire; it was measured and rejected, because the upside is
-  only the prefill share of a ~900ms call and the cost is a permanently
-  bloated prompt.
+- **Prompt caching does not fire here, and the reason is structural rather
+  than a matter of size.** The cache prefix is ordered tools, then system,
+  then messages — and the system prompt carries the current datetime in its
+  third line, so everything from there on differs on every single call. **Only
+  the TOOLS block is ever cacheable, however large the prompt grows.**
+
+  This is worth stating plainly because the obvious number misleads. Measured
+  with `count_tokens` after projects landed: the whole prompt is **4513**
+  tokens, comfortably past Haiku 4.5's 4096-token minimum — which reads as
+  "caching fires now" and does not. The tools alone are **3677**, and that is
+  the number that decides. (Before projects the whole prompt was 3767 and the
+  old note here reasoned from that figure, which was the wrong one even then.)
+
+  Moving the datetime block to the *end* of the system prompt would make the
+  system half cacheable too. It has not been done: the upside is only the
+  prefill share of a ~900ms call. `tests/test_router_prompt.py` asserts the
+  invariant rather than either number — either the prefix is under the floor
+  and `cache_control` is absent, or it is over and `cache_control` is set — so
+  it keeps telling the truth as the prompt changes.
 - **The Anthropic client sets its own httpx keepalive.** httpx expires idle
   connections after 5s by default and the SDK does not override it, so an
   assistant spoken to every few minutes would re-handshake on every request.
