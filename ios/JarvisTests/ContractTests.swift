@@ -251,6 +251,18 @@ struct ContractTests {
         #expect(Self.looksLikeISO(file.when) == false)
     }
 
+    @Test func aMissingEndpointIsNotAnUnreachableMini() throws {
+        /// The failure mode that sent a real debugging session down the wrong
+        /// path: a new screen against a daemon that had not been restarted
+        /// answered 404, and the screen said "Can't reach the Mini — usually
+        /// means Tailscale is off". The Mini was fine. The remedy was the
+        /// opposite one.
+        #expect(Failure.isMissingEndpoint(APIError.server(404, "Not Found")))
+        #expect(Failure.isMissingEndpoint(APIError.server(500, "boom")) == false)
+        #expect(Failure.isMissingEndpoint(APIError.transport("offline")) == false)
+        #expect(Failure.isMissingEndpoint(APIError.unauthorized) == false)
+    }
+
     @Test func aReportStillMissingItsSummaryDecodes() throws {
         /// `summary` is NULL for anything that finished before summaries
         /// existed, and that is normal and permanent rather than pending.

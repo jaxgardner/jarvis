@@ -13,10 +13,18 @@ import SwiftUI
 /// polls while anything is in flight and says so with a pulsing dot rather than
 /// a spinner that would imply the *list* is loading.
 struct ReportsView: View {
-    /// Set only when this is presented modally — by a tapped "Job finished"
-    /// notification, which must land on the report regardless of which tab is
-    /// showing. Nil when reached through Health's nav group, which has a back
-    /// button of its own.
+    /// Whether this view supplies its own `NavigationStack`.
+    ///
+    /// True when it is a root — presented modally by a tapped "Job finished"
+    /// notification. **False when pushed into an existing stack**, which is how
+    /// Health's nav group reaches it: a `NavigationStack` nested inside another
+    /// one makes the pushed screen bounce straight back to where it came from.
+    /// This screen used to be a tab and always owned its stack; it stopped
+    /// being one when Projects took the sixth slot.
+    var ownsNavigation = true
+
+    /// Set only when this is presented modally. Nil when reached through
+    /// Health's nav group, which has a back button of its own.
     var onDone: (() -> Void)?
 
     @EnvironmentObject private var api: JarvisAPI
@@ -32,22 +40,14 @@ struct ReportsView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                ScreenHeader(
-                    title: "Reports",
-                    kicker: hasLiveJob ? "Deep path · working" : "Deep path"
-                ) {
-                    if let onDone {
-                        Button("Done", action: onDone)
-                            .font(Theme.sans(14, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-                content
+        Group {
+            if ownsNavigation {
+                NavigationStack(path: $path) { screen }
+            } else {
+                // The enclosing stack owns navigation. `navigationDestination`
+                // below registers with it, so tapping a row still pushes.
+                screen
             }
-            .jarvisBackground()
-            .navigationDestination(for: Int.self) { ReportDetailView(jobID: $0) }
         }
         .task { await load() }
         // Running jobs finish while you're looking at them.
@@ -60,6 +60,25 @@ struct ReportsView: View {
         // A tapped "Job finished" notification lands on the job itself.
         .task { openPendingJob() }
         .onChange(of: router.pendingJobID) { _, _ in openPendingJob() }
+    }
+
+    /// The screen itself, with no opinion about who owns navigation.
+    private var screen: some View {
+        VStack(spacing: 0) {
+            ScreenHeader(
+                title: "Reports",
+                kicker: hasLiveJob ? "Deep path · working" : "Deep path"
+            ) {
+                if let onDone {
+                    Button("Done", action: onDone)
+                        .font(Theme.sans(14, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            content
+        }
+        .jarvisBackground()
+        .navigationDestination(for: Int.self) { ReportDetailView(jobID: $0) }
     }
 
     @ViewBuilder
@@ -110,6 +129,10 @@ struct ReportsView: View {
     }
 
     private func openPendingJob() {
+        // Only the copy that owns its stack can push programmatically. Consuming
+        // the request here when pushed inside Health's stack would swallow it —
+        // the modal copy, which can act on it, would then open on the list.
+        guard ownsNavigation else { return }
         guard let id = router.consumeJobRequest() else { return }
         path = [id]
     }

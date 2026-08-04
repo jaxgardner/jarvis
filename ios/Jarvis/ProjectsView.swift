@@ -18,6 +18,9 @@ struct ProjectsView: View {
     @State private var error: String?
     @State private var isLoading = false
     @State private var hasLoaded = false
+    /// The Mini answered, but has never heard of /projects. Told apart from an
+    /// unreachable Mini because the remedy is the opposite one.
+    @State private var staleServer = false
 
     var body: some View {
         NavigationStack {
@@ -41,7 +44,17 @@ struct ProjectsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if projects.isEmpty, let error {
+        if projects.isEmpty, staleServer {
+            ScrollView {
+                ErrorState(
+                    title: "The Mini is running older code",
+                    detail: "It answered, but it has no /projects endpoint yet.",
+                    hint: "Restart the jarvis daemon on the Mini.",
+                    retry: { Task { await load() } }
+                )
+            }
+            .refreshable { await load() }
+        } else if projects.isEmpty, let error {
             ScrollView {
                 ErrorState(
                     title: "Can't reach the Mini",
@@ -126,7 +139,9 @@ struct ProjectsView: View {
         do {
             projects = try await api.projects().projects
             error = nil
+            staleServer = false
         } catch {
+            staleServer = Failure.isMissingEndpoint(error)
             self.error = error.localizedDescription
         }
     }

@@ -445,6 +445,19 @@ enum Failure {
             ? String(message.dropFirst(unreachablePrefix.count))
             : message
     }
+
+    /// A 404 on a screen's own endpoint means the Mini is reachable and
+    /// running a build that predates this screen — not that the network is
+    /// down. Worth telling apart, because the remedy is the opposite one:
+    /// restart the daemon rather than check Tailscale.
+    ///
+    /// This is what a new screen looks like against an un-restarted daemon,
+    /// and it will happen again every time an endpoint ships ahead of a
+    /// deploy.
+    static func isMissingEndpoint(_ error: Error) -> Bool {
+        if case APIError.server(404, _) = error { return true }
+        return false
+    }
 }
 
 /// Thin async wrapper over the API. One instance, shared.
