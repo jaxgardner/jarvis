@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) async {
         let info = response.notification.request.content.userInfo
         let reminderID = info["reminder_id"] as? Int
+        // APNs custom payloads survive the round trip as strings often enough
+        // that assuming Int here would silently drop the link.
+        let rawJob = info["job_id"]
+        let jobID = rawJob as? Int ?? Int(rawJob as? String ?? "")
 
         switch response.actionIdentifier {
         case "SNOOZE":
@@ -62,16 +66,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             try? await JarvisAPI.shared.ack(reminder: reminderID)
         case "UNDO":
             _ = try? await JarvisAPI.shared.undo()
+        case "REPLY":
+            // The server 409s if the job is already running again, which is
+            // the right answer to a stale notification — nothing to do here
+            // but let it fail; the report is unchanged either way.
+            guard
+                let jobID,
+                let typed = (response as? UNTextInputNotificationResponse)?.userText,
+                !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            try? await JarvisAPI.shared.reply(toJob: jobID, text: typed)
         default:
             // The notification was tapped. A finished job has somewhere to
             // land now, and landing on whichever tab happened to be showing
             // makes the push pointless.
-            // APNs custom payloads survive the round trip as strings often
-            // enough that assuming Int here would silently drop the link.
-            let raw = info["job_id"]
-            if let jobID = raw as? Int ?? Int(raw as? String ?? "") {
-                LaunchRouter.shared.openJob(jobID)
-            }
+            if let jobID { LaunchRouter.shared.openJob(jobID) }
         }
     }
 }

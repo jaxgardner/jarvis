@@ -37,9 +37,19 @@ enum PushRegistrar {
             intentIdentifiers: [],
             options: []
         )
+        // A report that ends in a question usually finds you somewhere other
+        // than the app. iOS gives the inline field for free, and answering
+        // from the lock screen is the surface that matters most.
+        let reply = UNTextInputNotificationAction(
+            identifier: "REPLY",
+            title: "Reply",
+            options: [],
+            textInputButtonTitle: "Send",
+            textInputPlaceholder: "Answer this report"
+        )
         let job = UNNotificationCategory(
             identifier: jobCategory,
-            actions: [],
+            actions: [reply],
             intentIdentifiers: [],
             options: []
         )
