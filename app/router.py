@@ -94,6 +94,32 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "log_gratitude",
+        "description": (
+            "Record what the user is grateful or thankful for. Use whenever "
+            "they name something they are grateful for, thankful for, or "
+            "glad about: 'I'm grateful for the sun and Emma calling', "
+            "'thankful my sister rang', 'today I was glad about the quiet'. "
+            "Each thing they name is its own item. This is not add_note — "
+            "gratitude is what the nightly prompt asks for and it has its own "
+            "log; a note is any other fact worth keeping."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Each thing named, as its own short string, in the "
+                        "order it was said. One to three."
+                    ),
+                }
+            },
+            "required": ["items"],
+        },
+    },
+    {
         "name": "consume_item",
         "description": (
             "Record that food has been used up or is running out. Use whenever "
@@ -350,6 +376,8 @@ Choosing the tool:
 - Something at a set time the user is attending -> add_event.
 - Something the user wants to be prompted about -> add_reminder.
 - A fact to retain, with no time -> add_note.
+- Something the user is grateful, thankful or glad about -> log_gratitude, \
+one item per thing they name.
 - Food being used up or run out -> consume_item. "we're out of X", "finished \
 the X" are statements about the kitchen, not requests to buy.
 - Food arriving in the house -> add_item. "we have X now", "put X in the \
