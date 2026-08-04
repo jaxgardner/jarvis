@@ -26,6 +26,7 @@ LABELS=(
     com.jarvis.worker
     com.jarvis.calendar
     com.jarvis.gmail
+    com.jarvis.brief
 )
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="/Users/jaxongardner/Library/Logs/jarvis"

@@ -1,9 +1,9 @@
 """Gmail -> `email_messages` (context) and `proposals` (review queue).
 
-    uv run python -m ingest.gmail             both passes
-    uv run python -m ingest.gmail --context   metadata only, no model calls
-    uv run python -m ingest.gmail --full      drop the cursor, refetch
-    uv run python -m ingest.gmail --status    what the cursor says
+    uv run python -m ingest.gmail              context pass only (the default)
+    uv run python -m ingest.gmail --proposals  also run the dormant pass 2
+    uv run python -m ingest.gmail --full       drop the cursor, refetch
+    uv run python -m ingest.gmail --status     what the cursor says
 
 Two passes, with very different risk profiles, which is why they are separate
 functions and can be run separately.
@@ -13,11 +13,16 @@ functions and can be run separately.
 "did the landlord email me back?" by quoting what actually arrived. Nothing
 from this pass ever becomes an event or a reminder.
 
-**Pass 2, proposals.** A deliberately narrow query (flights, appointments,
-deliveries, reservations) picks candidates, and one Haiku call per candidate
-extracts a possible event into `proposals`. **Nothing here reaches `events`
-without a human accepting it**, and acceptance goes through the mutations
-helper so it is logged and undoable.
+**Pass 2, proposals — dormant.** A deliberately narrow query (flights,
+appointments, deliveries, reservations) picks candidates, and one Haiku call
+per candidate extracts a possible event into `proposals`. **Nothing here
+reaches `events` without a human accepting it**, and acceptance goes through
+the mutations helper so it is logged and undoable.
+
+It no longer runs on a schedule — `--proposals` is the only way in, and
+nothing passes it. The morning brief covers the same ground by telling you
+what arrived, and the pass has a starvation bug that meant it never produced a
+single proposal. Both are written up at the flag in `main()`.
 
 The query does the filtering, not the model. A broad query leaning on the model
 to reject irrelevant mail costs a Haiku call per message and is worse at it.
@@ -563,7 +568,26 @@ def main() -> int:
             f"full={context['full']}"
         )
 
-        if "--context" in sys.argv:
+        # Pass 2 is dormant. It is off by default and runs only when asked
+        # for explicitly, which nothing scheduled does.
+        #
+        # Two reasons, and the second is why the code is still here. First,
+        # the morning brief now tells you a dentist confirmation arrived, and
+        # saying "add dentist Thursday at 3" already works — so the queue's
+        # accept/reject ceremony buys a screen rather than a capability.
+        # Second, it has never actually worked: `sync_proposals` applies its
+        # LIMIT before intersecting with the narrow query, so `candidates()`
+        # returns the newest hundred unexamined messages whether or not they
+        # match, and at ~25 messages a day that window covers four days of
+        # mostly newsletters. Measured on a real mailbox: 39 narrow matches,
+        # 100 candidates, intersection zero. Nothing is ever examined, so
+        # `examined_at` is never stamped, so the window never advances —
+        # `proposals` has zero rows of any status and the log has read
+        # `examined=0` since the day it was deployed.
+        #
+        # Re-enabling it means fixing that first: filter by the narrow ids
+        # inside the SQL so the LIMIT applies to matching messages.
+        if "--proposals" not in sys.argv:
             return 0
 
         try:

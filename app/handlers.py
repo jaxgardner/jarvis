@@ -555,6 +555,60 @@ def _report_line(conn, job_id) -> str | None:
     return f"REPORT ({row['prompt']}): {body[:_REPORT_FALLBACK_CHARS]}"
 
 
+def _brief_line(conn, tz_name: str) -> str | None:
+    """Today's mail summary, as one context line.
+
+    Only the mail half is stored, so this is all the brief contributes — the
+    calendar, the reminders and the pantry are read live below and are
+    therefore never stale. That is the whole reason a brief asked for at 4pm
+    does not recite a 9am standup.
+    """
+    on = timeutil.now(tz_name).date().isoformat()
+    row = conn.execute(
+        "SELECT mail_summary FROM briefs WHERE brief_on = ?", (on,)
+    ).fetchone()
+    if row is None or not row["mail_summary"]:
+        return None
+    return f"MAIL THIS MORNING: {row['mail_summary']}"
+
+
+# How far ahead the brief looks for food about to go. The expiry sweep pushes
+# the day before; this is the wider "use it this week" horizon, which is a
+# different question asked at a different hour.
+_BRIEF_EXPIRY_DAYS = 3
+
+
+def _needs_doing(conn, tz_name: str) -> list[str]:
+    """The brief's third part: what is waiting on you.
+
+    Only for `kind='brief'`. These lines answer a question nobody asked
+    directly, which is right at 7am and noise inside "when is my dentist
+    appointment".
+    """
+    from pantry import inventory
+
+    lines = []
+    for item in inventory.active(conn):
+        days = item.get("days_left")
+        if days is not None and days <= _BRIEF_EXPIRY_DAYS:
+            when = "today" if days == 0 else ("overdue" if days < 0 else f"in {days} days")
+            lines.append(f"EXPIRING: {item['name']} — {when}")
+
+    # Reports that landed since yesterday. Deliberately not "reports awaiting
+    # an answer": nothing detects that a report asked you something, and
+    # inventing a classifier for one line of a brief would be the marker this
+    # system already decided against.
+    cutoff = timeutil.to_utc_iso(timeutil.now("UTC") - timedelta(days=1))
+    for row in conn.execute(
+        """SELECT id, prompt FROM jobs
+             WHERE status = 'done' AND finished_at >= ?
+             ORDER BY id DESC LIMIT 3""",
+        (cutoff,),
+    ).fetchall():
+        lines.append(f"REPORT FINISHED: {row['prompt']}")
+    return lines
+
+
 def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # Fast path: the router already told us the question's shape in the call
     # we had to make anyway, so common questions are answered by formatting
@@ -562,13 +616,19 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # it can't answer confidently, which falls through to the model rather
     # than guessing.
     kind = (args.get("kind") or "other").strip()
+    # The brief's mail half, when there is one. Fetched before the templated
+    # shortcuts so a day with mail in it always takes the model path — an
+    # agenda answered from rows alone would silently drop the half of the
+    # brief that only a model call can produce.
+    brief = _brief_line(conn, tz_name) if kind in ("brief", "agenda") else None
+
     templated = {
         "agenda": _answer_agenda,
         "when": _answer_when,
         "recall": _answer_recall,
         "pantry": _answer_pantry,
     }.get(kind)
-    if templated is not None:
+    if templated is not None and brief is None:
         answer = templated(conn, args, tz_name)
         if answer:
             return answer
@@ -579,6 +639,10 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     report = _report_line(conn, args.get("job_id"))
     if report:
         lines.append(report)
+    if brief:
+        lines.append(brief)
+    if kind == "brief":
+        lines.extend(_needs_doing(conn, tz_name))
 
     # Floor the window at 8 days regardless of what the router asked for.
     # The window starts at *today's* midnight, so window_days=1 — which the

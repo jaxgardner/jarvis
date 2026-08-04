@@ -27,6 +27,7 @@ wrong, say so — don't silently do it differently.
     worker/      claude -p job runner
     scheduler/   reminder firer, no LLM
     gratitude/   three things a day: entries, and the evening prompt
+    brief/       the 7am morning brief: mail summary, and the job
     ingest/      Google Calendar + Gmail importers
     migrations/  numbered .sql, applied by migrate.py
     tests/
@@ -171,6 +172,65 @@ is one table, one router tool, one sweep and one screen.
   at a seventh of the bar, so the tab reads "Grateful" while the screen is
   still called Gratitude, and the label is `lineLimit(1)` so no future one can
   wrap the whole bar taller.
+
+## The morning brief
+
+A 7am job summarizes the night's unread mail; asking "what've I got going on
+today" answers from that plus live data.
+
+- **Only the mail summary is stored.** `briefs` has one row a day holding one
+  paragraph. The calendar, the reminders, the food about to spoil and the
+  reports that landed overnight are all recomputed at the moment you ask,
+  because all of them can be. Storing a whole brief at 7am would mean reciting
+  a 9am standup at four in the afternoon; storing only the irreducible part
+  makes staleness impossible rather than merely unlikely.
+- **It is a launchd job, not a scheduler tick.** It makes a Haiku call, and
+  design principle 3 keeps `scheduler/run.py` free of anything that reaches a
+  model. `com.jarvis.brief` runs at 7am on `StartCalendarInterval`; generation
+  is idempotent by the day, so a late run after a sleeping machine, a retry
+  and a manual run cannot produce two pushes or two calls.
+- **Snippets, never bodies.** It reads `email_messages`, which holds Google's
+  snippet and nothing else, because `format=metadata` means Gmail never
+  returns a body. The worst failure available is a dull brief, not an invented
+  one.
+- **The push says it is ready, not what it says.** A brief is a paragraph and
+  iOS truncates it. Tapping opens Talk with the mic live — the same latch the
+  gratitude prompt uses, for the opposite reason: that one is *answered* by
+  talking, this one is *asked for* by talking.
+- **It always writes a sentence, even on a quiet morning.** The first version
+  let the model reply `NOTHING` when the mail was all newsletters, and on a
+  real mailbox that fired immediately: 29 messages, no summary, no push, a
+  feature that looked broken on day one. A quiet inbox and a dead job are
+  indistinguishable from silence, so "twenty-nine messages, nearly all job
+  alerts" is now the required answer. `mail.summarize` returns None only for
+  an empty mailbox or a failed call.
+- **The window is 24 hours, not the backlog.** 866 unread messages is a filing
+  decision nobody made. One Haiku call over ~25 snippets, capped at 60.
+- **This is the third metered call in the system**, after the report summary
+  and receipt extraction, and like both it stays out of `/metrics` — that
+  block is per-utterance and a brief has no utterance behind it.
+- **`query` gains `kind='brief'`**, and an `agenda` question picks up the mail
+  line too. The router can reasonably call "what's on today" either one, and
+  an answer that depends on which way it went is an answer you cannot trust.
+
+### The email review queue is dormant
+
+`ingest.gmail`'s pass 2 no longer runs on a schedule — `--proposals` is the
+only way in and nothing passes it. The table, endpoints and screen all remain;
+Review sits in Health's nav group.
+
+Two reasons, and the second is why the code is still there. The brief now
+tells you a dentist confirmation arrived and "add dentist Thursday at 3"
+already works, so the accept/reject queue buys a screen rather than a
+capability. And **it never worked**: `sync_proposals` applies its `LIMIT`
+before intersecting with the narrow Gmail query, so `candidates()` returns the
+newest hundred unexamined messages whether they match or not — four days of
+newsletters at 25 messages a day. Measured on the real mailbox: 39 narrow
+matches, 100 candidates, **intersection zero**. Nothing is examined, so
+`examined_at` is never stamped, so the window never advances. `proposals` has
+zero rows of any status and the log read `examined=0` from the day it shipped.
+Re-enabling means fixing that first — filter by the narrow ids inside the SQL
+so the `LIMIT` applies to matching messages.
 
 ## Voice
 
@@ -467,7 +527,7 @@ Deterministic, and it saves a round trip.
   `test_mcp_server_starts_from_outside_the_repo`.
 - **Prompt caching does not fire here.** Haiku 4.5's minimum cacheable prefix
   is 4096 tokens. Measured with `count_tokens`, the router prompt plus its
-  twelve tool definitions is **3681** — closer than it sounds, but under.
+  twelve tool definitions is **3767** — closer than it sounds, but under.
   Keep the prompt byte-stable anyway (free, and matters if it grows), but
   don't budget for the savings. Padding the prefix past 4096 on purpose would
   make the cache fire; it was measured and rejected, because the upside is

@@ -222,7 +222,7 @@ TOOLS: list[dict] = [
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["agenda", "when", "recall", "pantry", "other"],
+                    "enum": ["agenda", "when", "recall", "pantry", "brief", "other"],
                     "description": (
                         "The shape of the question. 'agenda' = what is "
                         "happening in a date range ('what's on tomorrow', "
@@ -232,7 +232,13 @@ TOOLS: list[dict] = [
                         "('what did I say about Sarah', 'what's the wifi "
                         "password'). 'pantry' = food in the house or the "
                         "shopping list ('what's in the fridge', 'do we have "
-                        "eggs', 'what do I need at the store'). 'other' = "
+                        "eggs', 'what do I need at the store'). 'brief' = a "
+                        "rundown of the whole day rather than a list of "
+                        "appointments ('what've I got going on today', 'brief "
+                        "me', 'catch me up', 'what's my day look like', "
+                        "'anything I should know about'). Prefer 'brief' over "
+                        "'agenda' when the question is broad enough to want "
+                        "the morning's mail in the answer. 'other' = "
                         "anything needing reasoning, counting, or comparison "
                         "across items."
                     ),

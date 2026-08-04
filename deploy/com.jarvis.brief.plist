@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Morning brief — LaunchDaemon, once a day at 7am local.
+
+  Its own job rather than a scheduler tick, and that is load-bearing: design
+  principle 3 keeps scheduler/run.py free of anything that reaches a model, so
+  reminders fire when the agent is broken. This makes a Haiku call, so it
+  belongs out here beside the ingesters.
+
+  StartCalendarInterval, not StartInterval: 7am is the point, and an interval
+  would drift. If the machine is asleep at 7 launchd runs it at the next wake,
+  which is the behaviour you want — a brief at 8:15 is still a morning brief.
+  Generation is idempotent by the day, so a late run and a manual run cannot
+  produce two pushes.
+
+  One Haiku call a day over ~25 message snippets. Fractions of a cent, and
+  unlike the dormant proposal pass there is no per-message multiplier to cap.
+
+  Install:  sudo ./deploy/install-daemon.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.brief</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>brief.run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>UserName</key>
+    <string>jaxongardner</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Deliberately absent: RunAtLoad. Installing the daemon at 3pm should
+         not push a morning brief. The day's row is written at 7am or not at
+         all, and `query` copes with not at all. -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/brief.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/brief.err.log</string>
+</dict>
+</plist>

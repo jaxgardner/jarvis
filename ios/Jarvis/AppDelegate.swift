@@ -82,9 +82,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // makes the push pointless.
             if let jobID {
                 LaunchRouter.shared.openJob(jobID)
-            } else if info["kind"] as? String == "gratitude" {
-                // Straight to the mic. The whole reason the prompt exists is
-                // that answering it should take no taps after the first.
+            } else if let kind = info["kind"] as? String,
+                      kind == "gratitude" || kind == "brief" {
+                // Straight to the mic, for opposite reasons that want the
+                // same thing: the gratitude prompt is answered by talking,
+                // and the brief is *asked for* by talking. Neither wants a
+                // screen in between.
                 LaunchRouter.shared.requestListening()
             }
         }
