@@ -249,7 +249,7 @@ def spoken(client, monkeypatch):
     from app import router
 
     def route_as(tool, args):
-        monkeypatch.setattr(router, "route", lambda text, tz, reports=(), projects=(): (tool, args))
+        monkeypatch.setattr(router, "route", lambda text, tz, reports=(), projects=(), today="": (tool, args))
 
     return client, route_as
 

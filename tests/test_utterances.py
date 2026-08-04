@@ -80,9 +80,15 @@ def test_the_eight_utterances(client):
     finally:
         conn.close()
 
-    # 3. a question routes to query, and answers in speakable prose
+    # 3. a question is answered in speakable prose.
+    #
+    # Either tool is correct here and which one you get is a live model's
+    # choice. The dentist reminder from #1 and #2 is in TODAY, so the router
+    # can answer it outright in one call; on a day where it was not, the same
+    # question routes to query and costs a second. What must not vary is the
+    # answer being speakable, which is what this step is really guarding.
     r = say(client, "what's on tomorrow")
-    assert intent_of(r["utterance_id"]) == "query"
+    assert intent_of(r["utterance_id"]) in ("query", "answer")
     assert not any(ch in r["reply"] for ch in ("*", "#", "|"))
 
     # 4. a fact with no time is a note

@@ -469,3 +469,69 @@ def test_a_when_question_does_not_drag_in_the_brief(db, monkeypatch):
     finally:
         conn.close()
     assert lines == []
+
+
+# ── answered in one call ──────────────────────────────────
+
+
+def test_today_block_carries_the_three_parts_of_a_brief(db, monkeypatch):
+    """What the router is handed so it can answer without a second call: the
+    stored mail summary, the live calendar, and what is waiting on you."""
+    from app import handlers
+    from app.db import connect, transaction
+    from brief import mail, run
+
+    monkeypatch.setattr(mail, "summarize", lambda messages: "Your landlord replied.")
+    mail_in(db, "the lease")
+    run.generate("America/Denver")
+
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO events (title, starts_at)
+                 VALUES ('standup', strftime('%Y-%m-%dT%H:%M:%SZ','now','+2 hours'))"""
+        )
+        conn.execute(
+            """INSERT INTO pantry_items (name, status, expires_on)
+                 VALUES ('spinach','active', date('now','+1 day'))"""
+        )
+
+    conn = connect()
+    try:
+        block = handlers.today_block(conn, "America/Denver")
+    finally:
+        conn.close()
+
+    assert "MAIL THIS MORNING: Your landlord replied." in block
+    assert "EVENT: standup" in block
+    assert "EXPIRING: spinach" in block
+
+
+def test_an_empty_day_produces_an_empty_block(db):
+    """Nothing stored must not become a TODAY heading with nothing under it."""
+    from app import handlers
+    from app.db import connect
+
+    conn = connect()
+    try:
+        assert handlers.today_block(conn, "America/Denver") == ""
+    finally:
+        conn.close()
+
+
+def test_the_spoken_answer_is_one_flat_line(db):
+    """`/say` promises a single plain-text string safe to hand to a TTS
+    engine. A newline in the tool argument would be spoken as a pause that is
+    not in the sentence."""
+    from app import handlers
+
+    reply = handlers.answer(
+        None, 1, {"reply": "You have a dentist appointment\ntomorrow  at 8 AM."}, "America/Denver"
+    )
+    assert reply == "You have a dentist appointment tomorrow at 8 AM."
+
+
+def test_an_empty_answer_does_not_reach_the_user_as_silence(db):
+    from app import handlers
+
+    assert handlers.answer(None, 1, {"reply": "   "}, "America/Denver")
+    assert handlers.answer(None, 1, {}, "America/Denver")
