@@ -32,6 +32,19 @@ def cost_usd(input_tokens: int, output_tokens: int) -> float:
         + output_tokens * PRICE_PER_MTOK["output"]
     ) / 1_000_000
 
+# The same property on every tool that can file something under a project.
+# One object referenced five times rather than five copies: they must read
+# identically, and a description that drifts on one tool is a routing bug you
+# find months later in exactly one phrasing.
+_PROJECT_ID = {
+    "type": "integer",
+    "description": (
+        "The id of a project from PROJECTS, when the user files this under "
+        "one — 'for the lettuce project, …'. Omit otherwise. Use an id only "
+        "if it appears in PROJECTS."
+    ),
+}
+
 TOOLS: list[dict] = [
     {
         "name": "add_event",
@@ -50,6 +63,7 @@ TOOLS: list[dict] = [
                 "ends_at": {"type": "string", "description": "Absolute ISO 8601 with offset."},
                 "location": {"type": "string"},
                 "all_day": {"type": "boolean"},
+                "project_id": _PROJECT_ID,
             },
             "required": ["title", "starts_at"],
         },
@@ -72,6 +86,7 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "description": "Optional: 'daily', or 'weekly:MO,WE'.",
                 },
+                "project_id": _PROJECT_ID,
             },
             "required": ["body", "fire_at"],
         },
@@ -87,10 +102,49 @@ TOOLS: list[dict] = [
             "properties": {
                 "body": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},
-                "project": {"type": "string"},
+                "project_id": _PROJECT_ID,
                 "person": {"type": "string", "description": "Person the note is about."},
             },
             "required": ["body"],
+        },
+    },
+    {
+        "name": "start_project",
+        "description": (
+            "Begin a new project — a named space for one thing the user is "
+            "working on. Use when they say to start, begin or set up a "
+            "project: 'start a project on hydroponic lettuce', 'set up a "
+            "project for the kitchen remodel'.\n"
+            "If the same sentence also asks for research, reading or "
+            "investigation — 'and find out what it takes', 'and see what's "
+            "involved', 'let me know what you find' — put that in "
+            "research_task and it runs as deep work under the new project. "
+            "Without a research ask, the project is simply created.\n"
+            "This tool is only for creating a project. Filing something under "
+            "one that already exists is add_note, add_event or add_reminder "
+            "with project_id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "What the project is called, in a few words.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One line saying what it is, if they said more.",
+                },
+                "research_task": {
+                    "type": "string",
+                    "description": (
+                        "The research to start now, restated clearly and "
+                        "self-containedly. Omit if they only asked to start "
+                        "the project."
+                    ),
+                },
+            },
+            "required": ["name"],
         },
     },
     {
@@ -220,9 +274,10 @@ TOOLS: list[dict] = [
                         "otherwise. Use an id only if it appears in REPORTS."
                     ),
                 },
+                "project_id": _PROJECT_ID,
                 "kind": {
                     "type": "string",
-                    "enum": ["agenda", "when", "recall", "pantry", "brief", "other"],
+                    "enum": ["agenda", "when", "recall", "pantry", "brief", "project", "other"],
                     "description": (
                         "The shape of the question. 'agenda' = what is "
                         "happening in a date range ('what's on tomorrow', "
@@ -238,7 +293,12 @@ TOOLS: list[dict] = [
                         "me', 'catch me up', 'what's my day look like', "
                         "'anything I should know about'). Prefer 'brief' over "
                         "'agenda' when the question is broad enough to want "
-                        "the morning's mail in the answer. 'other' = "
+                        "the morning's mail in the answer. 'project' = where "
+                        "something the user is working on stands, or what "
+                        "they are working on at all ('where am I on the "
+                        "lettuce project', 'what am I working on', 'catch me "
+                        "up on the remodel'); set project_id when they named "
+                        "one. 'other' = "
                         "anything needing reasoning, counting, or comparison "
                         "across items."
                     ),
@@ -355,6 +415,7 @@ TOOLS: list[dict] = [
                         "work. Use an id only if it appears in REPORTS."
                     ),
                 },
+                "project_id": _PROJECT_ID,
             },
             "required": ["restated_task"],
         },
@@ -372,7 +433,7 @@ Today is: {weekday}
 
 CALENDAR — copy dates from this table. Do not calculate them yourself.
 {calendar}
-{reports}
+{reports}{projects}
 Resolving times is the most important thing you do:
 - Every time you emit MUST be absolute ISO 8601 with an offset. Never a \
 relative phrase, never a bare date for something that has a time.
@@ -393,6 +454,11 @@ the X" are statements about the kitchen, not requests to buy.
 - Food arriving in the house -> add_item. "we have X now", "put X in the \
 freezer". The opposite of consume_item, and still not a request to buy.
 - Something to buy, with no claim about what you have -> add_to_list.
+- Starting a new named space for something the user is working on -> \
+start_project. If the same sentence asks for research, put it in \
+research_task rather than escalating separately.
+- Filing something under a project that already exists -> the normal tool for \
+what it is, with project_id set from PROJECTS.
 - What to cook, or a recipe from what is in the house -> escalate.
 - A question about stored information -> query.
 - An existing thing MOVING to a different time -> reschedule. Never add a \
@@ -458,7 +524,15 @@ def reports_table(reports) -> str:
     return "\n".join(lines)
 
 
-def system_prompt(tz_name: str, reports=()) -> str:
+def projects_table(projects) -> str:
+    """The PROJECTS block body. Empty string when there is nothing to list."""
+    return "\n".join(
+        f"  {project['id']:<5} {' '.join(str(project['name']).split())}"
+        for project in projects
+    )
+
+
+def system_prompt(tz_name: str, reports=(), projects=()) -> str:
     local = timeutil.now(tz_name)
     table = reports_table(reports)
     # Omitted entirely rather than rendered empty — an empty table invites the
@@ -469,12 +543,20 @@ def system_prompt(tz_name: str, reports=()) -> str:
         if table
         else ""
     )
+    project_table = projects_table(projects)
+    project_block = (
+        "\nPROJECTS — the user's active projects. Refer to one by its id.\n"
+        f"{project_table}\n"
+        if project_table
+        else ""
+    )
     return _SYSTEM.format(
         now_iso=local.isoformat(timespec="seconds"),
         tz_name=tz_name,
         weekday=local.strftime("%A, %B %-d, %Y"),
         calendar=calendar_table(local),
         reports=block,
+        projects=project_block,
     )
 
 
@@ -512,17 +594,17 @@ def _client() -> anthropic.Anthropic:
     return _CLIENT
 
 
-def route(text: str, tz_name: str, reports=()) -> tuple[str, dict]:
+def route(text: str, tz_name: str, reports=(), projects=()) -> tuple[str, dict]:
     """Classify one utterance. Returns (tool_name, tool_input).
 
-    `reports` is passed in rather than read here: this module makes model
-    calls and formats prompts, and giving it a database connection would
-    make it impossible to test either without one.
+    `reports` and `projects` are passed in rather than read here: this module
+    makes model calls and formats prompts, and giving it a database connection
+    would make it impossible to test either without one.
     """
     response = _client().messages.create(
         model=MODEL,
         max_tokens=1024,
-        system=system_prompt(tz_name, reports),
+        system=system_prompt(tz_name, reports, projects),
         tools=TOOLS,
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": text}],

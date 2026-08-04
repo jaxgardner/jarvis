@@ -235,6 +235,11 @@ def _ingest_health() -> dict:
     return {"sources": sources, "stale": stale}
 
 
+# Tools handled in this module rather than through handlers.FAST_HANDLERS,
+# because both may enqueue a job and so must shape the response themselves.
+DEEP_TOOLS = {"escalate", "start_project"}
+
+
 @app.post("/say", dependencies=[Depends(require_token)])
 def say(req: SayRequest) -> dict:
     # One scope around the whole request: `query` can call the model twice
