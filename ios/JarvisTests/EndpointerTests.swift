@@ -151,6 +151,32 @@ struct EndpointerTests {
         #expect(counter.count == 2)
     }
 
+    @Test func firesAtTheNewDefaultPause() {
+        /// The default is where most of the endpointer's share of the turn is
+        /// spent, so it is pinned here rather than left to the picker. Fed in
+        /// the tap's own 50 ms chunks, so the boundaries are multiples of that.
+        let (endpointer, counter) = Self.make(pause: VoiceSettings.defaultPause)
+        Self.feed(endpointer, rms: Self.speech, seconds: 1.0)
+
+        Self.feed(endpointer, rms: Self.roomTone, seconds: 0.4)
+        #expect(counter.count == 0, "0.40s is short of the pause")
+
+        Self.feed(endpointer, rms: Self.roomTone, seconds: 0.15)
+        #expect(counter.count == 1)
+    }
+
+    @Test func aBreathMidSentenceStillDoesNotSendAt045() {
+        /// The cost of shortening the endpointer, stated as a test. 0.45s
+        /// leaves less room than 0.8s did, so the case that has to keep
+        /// working is the ordinary one: a beat in the middle of a sentence
+        /// must not post half a reminder.
+        let (endpointer, counter) = Self.make(pause: 0.45)
+        Self.feed(endpointer, rms: Self.speech, seconds: 1.0)
+        Self.feed(endpointer, rms: Self.roomTone, seconds: 0.3)  // a breath, not a stop
+        Self.feed(endpointer, rms: Self.speech, seconds: 1.0)
+        #expect(counter.count == 0)
+    }
+
     @Test func theConfiguredPauseIsRespected() {
         let (quick, quickCount) = Self.make(pause: 0.8)
         Self.feed(quick, rms: Self.speech, seconds: 1.0)

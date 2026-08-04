@@ -134,18 +134,24 @@ enum VoiceSettings {
     /// A second of true silence is already a long gap in speech, and shorter
     /// than this an ordinary mid-sentence breath can send half a reminder.
     ///
-    /// It starts at 0.8 anyway, because measuring the whole path made the cost
+    /// It started at 0.8 because measuring the whole path made the cost
     /// legible: this is the single largest fixed block in the round trip —
     /// larger than the model call — and every millisecond of it is spent
-    /// waiting on someone who has already stopped talking. 0.8 is the shortest
-    /// setting that still reads as a pause rather than an interruption.
+    /// waiting on someone who has already stopped talking.
+    ///
+    /// 0.45 because measuring the whole *turn* made it legible again. The
+    /// turn is ~3000ms, of which 800 was this, and `rearm()` means a
+    /// premature fire resumes listening rather than truncating the
+    /// utterance — so the cost of being wrong here is one extra beat, not a
+    /// lost sentence.
     ///
     /// Unlike the rest of the latency work this is a judgement about speech,
     /// not a measurement, so it is the one number here to re-decide by ear.
     /// The picker below changes it without a rebuild.
-    static let defaultPause: Double = 0.8
+    static let defaultPause: Double = 0.45
 
     static let choices: [(label: String, seconds: Double)] = [
+        ("Fast 0.45s", 0.45),
         ("Quick 0.8s", 0.8),
         ("Normal 1.2s", 1.2),
         ("Relaxed 2.0s", 2.0),
