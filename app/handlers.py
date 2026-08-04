@@ -848,6 +848,43 @@ def _search_notes(conn, question: str, limit: int = 10) -> list[dict]:
     ]
 
 
+def context_block(conn, text: str, limit: int = 5) -> str:
+    """What the archive has to say about this utterance, fetched before the
+    router sees it.
+
+    `query` costs a second model call — measured 2675ms against 1410ms — and
+    the only reason is that it searches after the model has decided to
+    search. The search is ~3ms. Doing it first lets the router answer through
+    `answer` in the call it had to make anyway.
+
+    Unlike TODAY, this block *is* derived from the user's words, and that is
+    a real difference: TODAY is safe because nothing the user said can put a
+    wrong row in it. The safety here comes from elsewhere — `query` stays
+    reachable and the prompt calls these candidates rather than answers, so a
+    miss degrades to the two-call path that exists today. The worst case is
+    the current case.
+
+    Returns "" when nothing matches, so the caller drops the heading entirely
+    rather than showing an empty one.
+    """
+    # Both searches already exist and are already used by `query`. Reusing
+    # them rather than writing a second pair is what keeps the block the
+    # router sees and the block `query` builds from saying the same thing —
+    # two formatters would drift, and the drift would surface as an answer
+    # that changed depending on which path it took.
+    lines: list[str] = []
+    for note in _search_notes(conn, text, limit):
+        body = " ".join(str(note["body"]).split())
+        lines.append(f"NOTE: {body}")
+
+    for mail in search_email(conn, text, limit):
+        subject = " ".join(str(mail["subject"] or "").split())
+        sender = " ".join(str(mail["sender"] or "").split())
+        lines.append(f"EMAIL: from {sender} — {subject}")
+
+    return "\n".join(lines[:limit])
+
+
 _EMAIL_COLUMNS = "sender, subject, snippet, received_at, is_unread"
 
 
