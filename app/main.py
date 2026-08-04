@@ -28,7 +28,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app import config, devices, handlers, mutations, router, timeutil, usage
 from app.db import connect, transaction
@@ -788,6 +788,35 @@ def job(job_id: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="no such job")
     return dict(row)
+
+
+class JobReply(BaseModel):
+    # Whitespace is not an answer, and the worker would fall back to re-running
+    # the original ask against a session that has already moved past it.
+    text: str = Field(min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reply cannot be blank")
+        return value
+
+
+@app.post("/jobs/{job_id}/reply", dependencies=[Depends(require_token)])
+def reply_to_job(job_id: int, req: JobReply) -> dict:
+    """Answer a report that asked you something.
+
+    The job is re-queued in place and resumes its Claude Code session, so a
+    task you had to answer a question about stays one report.
+    """
+    with transaction() as conn:
+        outcome = handlers.reply_to_job(conn, job_id, req.text)
+    if outcome == "missing":
+        raise HTTPException(status_code=404, detail="no such job")
+    if outcome == "live":
+        raise HTTPException(status_code=409, detail="job is already running")
+    return job(job_id)
 
 
 @app.get("/metrics", dependencies=[Depends(require_token)])

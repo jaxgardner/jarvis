@@ -222,3 +222,57 @@ def test_resume_latest_returns_none_when_there_is_nothing_to_resume(db):
 
     with transaction() as conn:
         assert handlers.resume_latest_job(conn, "go deeper") is None
+
+
+# ── the endpoint ──────────────────────────────────────────
+
+
+@pytest.fixture
+def client(db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app)
+    c.headers.update({"Authorization": f"Bearer {SHARED}"})
+    return c
+
+
+def test_reply_endpoint_requeues_and_returns_the_job(client, db):
+    job_id = make_job(db)
+
+    response = client.post(f"/jobs/{job_id}/reply", json={"text": "Go with B"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == job_id
+    assert body["status"] == "queued"
+    assert body["pending_input"] == "Go with B"
+    assert body["prompt"] == "Compare the three vendors"
+
+
+def test_reply_endpoint_409s_on_a_live_job(client, db):
+    job_id = make_job(db, status="running")
+    assert (
+        client.post(f"/jobs/{job_id}/reply", json={"text": "Go with B"}).status_code
+        == 409
+    )
+
+
+def test_reply_endpoint_404s_on_an_unknown_job(client):
+    assert client.post("/jobs/999/reply", json={"text": "Go with B"}).status_code == 404
+
+
+def test_reply_endpoint_rejects_an_empty_reply(client, db):
+    job_id = make_job(db)
+    assert client.post(f"/jobs/{job_id}/reply", json={"text": "  "}).status_code == 422
+
+
+def test_reply_endpoint_requires_a_token(db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    job_id = make_job(db)
+    anonymous = TestClient(app)
+    assert anonymous.post(f"/jobs/{job_id}/reply", json={"text": "x"}).status_code == 401
