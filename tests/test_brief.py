@@ -297,6 +297,62 @@ def test_a_day_with_only_calendar_is_still_pushed(db, pushes, monkeypatch):
     assert run.push("America/Denver") is True
 
 
+def test_a_row_written_before_seven_does_not_eat_the_push(db, pushes, monkeypatch):
+    """The bug this test exists for: the push used to be reachable only from
+    the branch that generated the row, so anything that wrote today's row
+    early — a manual run, a `--force`, a retry — left the 7am job saying
+    "already ran today" and pushing nothing. The row means the summary
+    exists, not that you were told about it."""
+    from brief import mail, run
+
+    monkeypatch.setattr(mail, "summarize", lambda messages: "Your landlord replied.")
+    mail_in(db, "the lease")
+
+    run.generate("America/Denver")  # the 2am run that wrote the row
+    assert pushes == []
+
+    monkeypatch.setattr(run.sys, "argv", ["brief.run"])
+    run.main()  # the 7am job, finding the row already there
+
+    assert len(pushes) == 1
+
+
+def test_one_push_a_morning(db, pushes, monkeypatch):
+    """launchd retrying, a late catch-up run after a sleeping machine, and a
+    manual run must between them produce one notification."""
+    from brief import mail, run
+
+    monkeypatch.setattr(mail, "summarize", lambda messages: "Your landlord replied.")
+    mail_in(db, "the lease")
+    run.generate("America/Denver")
+
+    assert run.push("America/Denver") is True
+    assert run.push("America/Denver") is False
+    assert len(pushes) == 1
+
+
+def test_a_push_that_went_nowhere_is_not_recorded_as_delivered(db, monkeypatch):
+    """`notify.push` returns False when no device is registered, which on
+    APNs alone is a real state. Stamping it would claim a delivery that did
+    not happen and burn the day's only notification."""
+    from app import notify
+    from brief import mail, run
+
+    monkeypatch.setattr(mail, "summarize", lambda messages: "Your landlord replied.")
+    mail_in(db, "the lease")
+    run.generate("America/Denver")
+
+    monkeypatch.setattr(notify, "push", lambda body, **kwargs: False)
+    assert run.push("America/Denver") is False
+
+    sent = []
+    monkeypatch.setattr(
+        notify, "push", lambda body, **kwargs: sent.append(body) or True
+    )
+    assert run.push("America/Denver") is True
+    assert len(sent) == 1
+
+
 # ── the voice answer ──────────────────────────────────────
 
 

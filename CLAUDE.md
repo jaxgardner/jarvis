@@ -200,6 +200,17 @@ today" answers from that plus live data.
   iOS truncates it. Tapping opens Talk with the mic live — the same latch the
   gratitude prompt uses, for the opposite reason: that one is *answered* by
   talking, this one is *asked for* by talking.
+- **The row and the push are separate facts, and conflating them cost a
+  morning.** The row means the summary exists; a `heartbeats` row named
+  `brief`, holding the day it last pushed for, means you were told. The push
+  used to be reachable only from the branch that generated the row, so
+  anything writing today's row early — a manual run, a `--force`, a retry
+  after a failed push — left the 7am job printing `already ran today` and
+  sending nothing. That is exactly what happened on 2026-08-04: a 2:33am
+  development run wrote the row, and 7am had nothing left to do. `push()` now
+  dedupes and stamps itself, `main()` calls it unconditionally, and nothing
+  is stamped unless the push landed — the same bookkeeping in the same table
+  as `gratitude.nudge`, for the same reasons.
 - **It always writes a sentence, even on a quiet morning.** The first version
   let the model reply `NOTHING` when the mail was all newsletters, and on a
   real mailbox that fired immediately: 29 messages, no summary, no push, a
