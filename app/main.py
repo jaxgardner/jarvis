@@ -263,29 +263,28 @@ def _say(req: SayRequest) -> dict:
         raise HTTPException(status_code=502, detail=f"router failed: {exc}") from exc
 
     if tool == "escalate":
+        task = args.get("restated_task", req.text)
         with transaction() as conn:
-            # A follow-up inherits the previous job's Claude Code session, so
-            # "what did you find about the second one" resumes that
-            # conversation instead of starting cold with no idea what "the
-            # second one" was.
-            session_id = None
-            if args.get("is_follow_up"):
-                prior = conn.execute(
-                    """SELECT session_id FROM jobs
-                         WHERE status = 'done' AND session_id IS NOT NULL
-                         ORDER BY id DESC LIMIT 1"""
-                ).fetchone()
-                session_id = prior["session_id"] if prior else None
-
-            job_id = int(
-                conn.execute(
-                    "INSERT INTO jobs (utterance_id, prompt, session_id) VALUES (?,?,?)",
-                    (utterance_id, args.get("restated_task", req.text), session_id),
-                ).lastrowid
+            # A follow-up resumes the report it belongs to, rewriting it in
+            # place — the same thing the reply box and the notification action
+            # do. "What about the second one" was never separate work, and one
+            # mechanic means the Reports list holds one kind of thing.
+            job_id = (
+                handlers.resume_latest_job(conn, task)
+                if args.get("is_follow_up")
+                else None
             )
+            resumed = job_id is not None
+            if job_id is None:
+                job_id = int(
+                    conn.execute(
+                        "INSERT INTO jobs (utterance_id, prompt) VALUES (?,?)",
+                        (utterance_id, task),
+                    ).lastrowid
+                )
         reply = (
             "Picking up where we left off. I'll ping you."
-            if session_id
+            if resumed
             else "On it. I'll ping you when it's done."
         )
         latency = _finish(utterance_id, "deep", tool, reply, started)

@@ -276,3 +276,57 @@ def test_reply_endpoint_requires_a_token(db):
     job_id = make_job(db)
     anonymous = TestClient(app)
     assert anonymous.post(f"/jobs/{job_id}/reply", json={"text": "x"}).status_code == 401
+
+
+# ── the voice path ────────────────────────────────────────
+
+
+@pytest.fixture
+def spoken(client, monkeypatch):
+    """A /say client whose router answer is ours to choose."""
+    from app import router
+
+    def route_as(tool, args):
+        monkeypatch.setattr(router, "route", lambda text, tz: (tool, args))
+
+    return client, route_as
+
+
+def test_a_spoken_follow_up_resumes_the_report_it_belongs_to(spoken, db):
+    """One mechanic however you answer. Left as an insert, the Reports list
+    would hold two different kinds of thing depending on how you spoke."""
+    client, route_as = spoken
+    job_id = make_job(db)
+    route_as("escalate", {"restated_task": "go with B", "is_follow_up": True})
+
+    body = client.post("/say", json={"text": "go with B", "client": "ios"}).json()
+
+    assert body["job_id"] == job_id
+    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 1
+    job = rows(db, "SELECT status, pending_input FROM jobs WHERE id = ?", (job_id,))[0]
+    assert job["status"] == "queued"
+    assert job["pending_input"] == "go with B"
+
+
+def test_a_spoken_follow_up_with_nothing_to_resume_starts_a_job(spoken, db):
+    client, route_as = spoken
+    route_as("escalate", {"restated_task": "research desks", "is_follow_up": True})
+
+    body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
+
+    job = rows(db, "SELECT prompt, status FROM jobs WHERE id = ?", (body["job_id"],))[0]
+    assert job["prompt"] == "research desks"
+    assert job["status"] == "queued"
+
+
+def test_a_new_deep_task_still_inserts_its_own_job(spoken, db):
+    """Only follow-ups resume. A fresh task must not overwrite the last
+    report you asked for."""
+    client, route_as = spoken
+    existing = make_job(db)
+    route_as("escalate", {"restated_task": "research desks", "is_follow_up": False})
+
+    body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
+
+    assert body["job_id"] != existing
+    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 2
