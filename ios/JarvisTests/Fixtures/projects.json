@@ -1,0 +1,16 @@
+{
+    "projects": [
+        {
+            "id": 1,
+            "name": "Hydroponic Lettuce",
+            "description": "Salad in the garage over winter",
+            "status": "active",
+            "slug": "hydroponic-lettuce",
+            "created_at": "2026-08-04T16:32:15Z",
+            "note_count": 2,
+            "report_count": 1,
+            "link_count": 1,
+            "last_activity_at": "2026-08-04T16:32:15Z"
+        }
+    ]
+}

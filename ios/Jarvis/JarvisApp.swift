@@ -32,7 +32,7 @@ struct JarvisApp: App {
 /// treatment, the mono labels and the pending-proposal badge are all part of
 /// the design language, and the stock bar can carry none of them.
 enum JarvisTab: String, CaseIterable, Hashable {
-    case talk, agenda, pantry, gratitude, reports, health
+    case talk, agenda, pantry, gratitude, projects, health
 
     var label: String {
         switch self {
@@ -43,23 +43,24 @@ enum JarvisTab: String, CaseIterable, Hashable {
         // wrapped its final letter onto a second line. The screen is still
         // called Gratitude; only the tab is abbreviated.
         case .gratitude: return "Grateful"
-        case .reports: return "Reports"
+        case .projects: return "Projects"
         case .health: return "Health"
         }
     }
 
     /// The brief's SF Symbols, kept as-is where it named them.
     ///
-    /// Reports is the exception: `gearshape.2` was drawn for the tab when it
-    /// was called Jobs and said "background machinery". What lands here is
-    /// written work you asked for, so it gets a document.
+    /// Projects took the slot Reports held. Reports moved into Health's nav
+    /// group beside Activity and Review: every project screen lists its own
+    /// reports with a reply box, so what is left on the standalone screen is
+    /// the loose ones and the old ones.
     var symbol: String {
         switch self {
         case .talk: return "mic.fill"
         case .agenda: return "calendar"
         case .pantry: return "refrigerator"
         case .gratitude: return "sparkles"
-        case .reports: return "doc.text.magnifyingglass"
+        case .projects: return "folder"
         case .health: return "heart.text.square"
         }
     }
@@ -75,6 +76,7 @@ struct RootView: View {
     @ObservedObject private var router = LaunchRouter.shared
 
     @State private var tab: JarvisTab = .talk
+    @State private var showingReports = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,7 +88,7 @@ struct RootView: View {
                 case .agenda: AgendaView()
                 case .pantry: PantryView()
                 case .gratitude: GratitudeView()
-                case .reports: ReportsView()
+                case .projects: ProjectsView()
                 case .health: HealthView()
                 }
             }
@@ -103,9 +105,15 @@ struct RootView: View {
             }
         }
         // A "Job finished" notification should land on the report, not on
-        // whichever tab happened to be showing.
+        // whichever tab happened to be showing. Reports is no longer a tab —
+        // it moved into Health's nav group when Projects took the slot — so
+        // this presents it rather than switching to it. ReportsView reads the
+        // pending id itself and pushes straight to that report.
         .onChange(of: router.pendingJobID) { _, id in
-            if id != nil { tab = .reports }
+            if id != nil { showingReports = true }
+        }
+        .fullScreenCover(isPresented: $showingReports) {
+            ReportsView(onDone: { showingReports = false })
         }
         // The mic latch can be set while another tab is showing — a tapped
         // gratitude push, from anywhere in the app. TalkView consumes it, but

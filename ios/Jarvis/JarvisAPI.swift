@@ -241,6 +241,82 @@ struct GratitudeResponse: Decodable {
     let days: [Day]
 }
 
+struct ProjectsResponse: Decodable {
+    struct Project: Decodable, Identifiable {
+        let id: Int
+        let name: String
+        let description: String?
+        let status: String
+        let noteCount: Int
+        let reportCount: Int
+        let linkCount: Int
+        let lastActivityAt: String?
+    }
+    let projects: [Project]
+}
+
+/// One project and everything filed under it.
+///
+/// There is no status paragraph here because the server does not store one:
+/// the sections below ARE the status, newest thinking first. Asking "where am
+/// I" out loud is what generates prose, and it does it from these same rows.
+struct ProjectDetail: Decodable {
+    /// Every `when` here is rendered by the server. Do NOT re-format dates
+    /// client-side — the same rule `AgendaResponse` states, for the same
+    /// reason: two implementations of "tomorrow at 3 PM" will drift.
+    struct Note: Decodable, Identifiable {
+        let id: Int
+        let body: String
+        let when: String
+    }
+
+    struct Report: Decodable, Identifiable {
+        let id: Int
+        let prompt: String
+        let status: String
+        let summary: String?
+        let error: String?
+    }
+
+    struct Event: Decodable, Identifiable {
+        let id: Int
+        let title: String
+        let location: String?
+        let when: String
+    }
+
+    struct Reminder: Decodable, Identifiable {
+        let id: Int
+        let body: String
+        let status: String
+        let when: String
+    }
+
+    struct Link: Decodable, Identifiable {
+        let id: Int
+        let url: String
+        let title: String?
+    }
+
+    struct File: Decodable, Identifiable {
+        var id: String { name }
+        let name: String
+        let bytes: Int
+        let when: String
+    }
+
+    let id: Int
+    let name: String
+    let description: String?
+    let status: String
+    let notes: [Note]
+    let reports: [Report]
+    let events: [Event]
+    let reminders: [Reminder]
+    let links: [Link]
+    let files: [File]
+}
+
 struct ReceiptResponse: Decodable {
     let receiptId: Int
     let status: String
@@ -368,6 +444,19 @@ enum Failure {
         message.hasPrefix(unreachablePrefix)
             ? String(message.dropFirst(unreachablePrefix.count))
             : message
+    }
+
+    /// A 404 on a screen's own endpoint means the Mini is reachable and
+    /// running a build that predates this screen — not that the network is
+    /// down. Worth telling apart, because the remedy is the opposite one:
+    /// restart the daemon rather than check Tailscale.
+    ///
+    /// This is what a new screen looks like against an un-restarted daemon,
+    /// and it will happen again every time an endpoint ships ahead of a
+    /// deploy.
+    static func isMissingEndpoint(_ error: Error) -> Bool {
+        if case APIError.server(404, _) = error { return true }
+        return false
     }
 }
 
@@ -521,6 +610,39 @@ final class JarvisAPI: ObservableObject {
 
     func job(_ id: Int) async throws -> JobDetail {
         try await send("/jobs/\(id)")
+    }
+
+    // MARK: - Projects
+
+    func projects() async throws -> ProjectsResponse {
+        try await send("/projects")
+    }
+
+    func project(_ id: Int) async throws -> ProjectDetail {
+        try await send("/projects/\(id)?tz=\(TimeZone.current.identifier)")
+    }
+
+    /// You cannot speak a URL, so this is the one thing about a project that
+    /// is typed rather than said.
+    @discardableResult
+    func addLink(project id: Int, url: String, title: String?) async throws -> ProjectDetail {
+        var body: [String: Any] = ["url": url]
+        if let title, !title.isEmpty { body["title"] = title }
+        return try await send("/projects/\(id)/links", method: "POST", body: body)
+    }
+
+    /// Marking a project done takes it out of the router's PROJECTS block, so
+    /// it stops being nameable by voice.
+    @discardableResult
+    func setStatus(project id: Int, status: String) async throws -> ProjectDetail {
+        try await send("/projects/\(id)", method: "PATCH", body: ["status": status])
+    }
+
+    func projectFile(project id: Int, name: String) async throws -> String {
+        struct Artifact: Decodable { let name: String; let text: String }
+        let escaped = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let artifact: Artifact = try await send("/projects/\(id)/files/\(escaped)")
+        return artifact.text
     }
 
     /// Answer a report that asked you something. The job resumes its session

@@ -231,11 +231,11 @@ def get_person(name: str) -> str:
 
 @mcp.tool()
 def list_projects() -> str:
-    """All projects and how many notes each has."""
+    """All projects, what each is, and how many notes it has."""
     conn = connect()
     try:
         rows = conn.execute(
-            """SELECT p.id, p.name, p.status,
+            """SELECT p.id, p.name, p.description, p.status,
                       (SELECT count(*) FROM notes n
                          WHERE n.project_id = p.id AND n.deleted_at IS NULL) AS note_count
                  FROM projects p ORDER BY p.name"""
@@ -243,6 +243,31 @@ def list_projects() -> str:
     finally:
         conn.close()
     return json.dumps([dict(r) for r in rows], indent=2)
+
+
+@mcp.tool()
+def project_context(project_id: int) -> str:
+    """Everything stored about one project — the user's notes on it newest
+    first, the reports already written, its dated items, its links, and the
+    files in its working directory.
+
+    Read this before doing project work. What the user has been thinking is
+    usually the difference between research they wanted and research they
+    already did.
+
+    Read-only. Nothing here writes to a project: the user files their own
+    thinking, and a report is how you hand yours back.
+    """
+    from projects import store
+
+    conn = connect()
+    try:
+        detail = store.detail(conn, project_id, DEFAULT_TZ)
+    finally:
+        conn.close()
+    if detail is None:
+        return f"No project with id {project_id}."
+    return json.dumps(detail, indent=2)
 
 
 if __name__ == "__main__":

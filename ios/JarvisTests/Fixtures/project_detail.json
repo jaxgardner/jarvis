@@ -1,0 +1,71 @@
+{
+    "id": 1,
+    "name": "Hydroponic Lettuce",
+    "status": "active",
+    "description": "Salad in the garage over winter",
+    "created_at": "2026-08-04T16:32:15Z",
+    "slug": "hydroponic-lettuce",
+    "notes": [
+        {
+            "id": 2,
+            "body": "The south wall gets no light after 2pm, so this is going in the garage.",
+            "tags": null,
+            "created_at": "2026-08-04T16:32:15Z",
+            "when": "today at 10:32 AM"
+        },
+        {
+            "id": 1,
+            "body": "Thinking about deep water culture rather than NFT \u2014 fewer moving parts.",
+            "tags": null,
+            "created_at": "2026-08-04T16:32:15Z",
+            "when": "today at 10:32 AM"
+        }
+    ],
+    "reports": [
+        {
+            "id": 1,
+            "prompt": "what does it take to start hydroponic lettuce",
+            "status": "done",
+            "summary": "A 4x2 tent, a 240W LED, an air pump and net pots \u2014 about $380 up front. Butterhead is the easiest first crop.",
+            "error": null,
+            "created_at": "2026-08-04T16:32:15Z",
+            "finished_at": "2026-08-04T09:12:00Z"
+        }
+    ],
+    "events": [
+        {
+            "id": 1,
+            "title": "Pick up net pots",
+            "starts_at": "2026-08-11T21:00:00Z",
+            "ends_at": null,
+            "all_day": 0,
+            "location": "Ace Hardware",
+            "when": "Tuesday, August 11 at 3 PM"
+        }
+    ],
+    "reminders": [
+        {
+            "id": 1,
+            "body": "order the air pump",
+            "fire_at": "2026-08-09T16:00:00Z",
+            "status": "pending",
+            "when": "Sunday at 10 AM"
+        }
+    ],
+    "links": [
+        {
+            "id": 1,
+            "url": "https://example.com/dwc-guide",
+            "title": "Deep water culture guide",
+            "created_at": "2026-08-04T16:32:15Z"
+        }
+    ],
+    "files": [
+        {
+            "name": "shopping-list.md",
+            "bytes": 61,
+            "modified_at": "2026-08-04T16:32:15Z",
+            "when": "today at 10:32 AM"
+        }
+    ]
+}

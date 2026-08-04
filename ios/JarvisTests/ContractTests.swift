@@ -199,6 +199,84 @@ struct ContractTests {
         let short = try #require(response.days.first { $0.on == "2026-08-02" })
         #expect(short.entries.count == 1)
     }
+
+    // MARK: - Projects
+
+    @Test func projectListDecodes() throws {
+        let response = try Self.decode(ProjectsResponse.self, from: "projects")
+        let project = try #require(response.projects.first)
+
+        #expect(project.name == "Hydroponic Lettuce")
+        #expect(project.status == "active")
+        #expect(project.noteCount == 2)
+        #expect(project.reportCount == 1)
+        #expect(project.linkCount == 1)
+    }
+
+    @Test func projectDetailDecodes() throws {
+        let detail = try Self.decode(ProjectDetail.self, from: "project_detail")
+
+        #expect(detail.name == "Hydroponic Lettuce")
+        // Every section must decode even when empty — a throw here renders as
+        // a blank screen with an error nobody reads.
+        #expect(detail.notes.count == 2)
+        #expect(detail.reports.count == 1)
+        #expect(detail.events.count == 1)
+        #expect(detail.reminders.count == 1)
+        #expect(detail.links.count == 1)
+        #expect(detail.files.count == 1)
+    }
+
+    /// Whether a string is a raw ISO 8601 stamp. Deliberately a pattern and
+    /// not `contains("T")` — "Tuesday, August 11 at 3 PM" is a correctly
+    /// spoken date that happens to start with the same letter.
+    static func looksLikeISO(_ value: String) -> Bool {
+        value.range(of: #"\d{4}-\d{2}-\d{2}T"#, options: .regularExpression) != nil
+    }
+
+    @Test func theServerSpeaksItsOwnDates() throws {
+        /// An ISO string reaching the phone means someone dropped the `when`
+        /// rendering and the screen is about to show "2026-08-11T21:00:00Z" to
+        /// a human. The rule is stated on AgendaResponse and holds here too.
+        let detail = try Self.decode(ProjectDetail.self, from: "project_detail")
+
+        let event = try #require(detail.events.first)
+        #expect(event.when == "Tuesday, August 11 at 3 PM")
+        #expect(Self.looksLikeISO(event.when) == false)
+
+        let note = try #require(detail.notes.first)
+        #expect(Self.looksLikeISO(note.when) == false)
+
+        let file = try #require(detail.files.first)
+        #expect(Self.looksLikeISO(file.when) == false)
+    }
+
+    @Test func aMissingEndpointIsNotAnUnreachableMini() throws {
+        /// The failure mode that sent a real debugging session down the wrong
+        /// path: a new screen against a daemon that had not been restarted
+        /// answered 404, and the screen said "Can't reach the Mini — usually
+        /// means Tailscale is off". The Mini was fine. The remedy was the
+        /// opposite one.
+        #expect(Failure.isMissingEndpoint(APIError.server(404, "Not Found")))
+        #expect(Failure.isMissingEndpoint(APIError.server(500, "boom")) == false)
+        #expect(Failure.isMissingEndpoint(APIError.transport("offline")) == false)
+        #expect(Failure.isMissingEndpoint(APIError.unauthorized) == false)
+    }
+
+    @Test func aReportStillMissingItsSummaryDecodes() throws {
+        /// `summary` is NULL for anything that finished before summaries
+        /// existed, and that is normal and permanent rather than pending.
+        let json = """
+        {"id": 1, "name": "x", "description": null, "status": "active",
+         "notes": [], "reports": [{"id": 3, "prompt": "a", "status": "done",
+         "summary": null, "error": null}],
+         "events": [], "reminders": [], "links": [], "files": []}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let detail = try decoder.decode(ProjectDetail.self, from: Data(json.utf8))
+        #expect(detail.reports[0].summary == nil)
+    }
 }
 
 /// Anchors `Bundle(for:)` to the test bundle rather than the app's.

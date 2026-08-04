@@ -23,6 +23,10 @@ WRITABLE = {
     "pantry_items",
     "shopping_list",
     "gratitude_entries",
+    # A pasted link is a human action, and human actions are what /undo
+    # exists to reverse — the same reasoning that routes accept_proposal
+    # through the helper while synced writes bypass it.
+    "project_links",
 }
 SOFT_DELETE = {"events", "notes"}  # have a deleted_at column
 

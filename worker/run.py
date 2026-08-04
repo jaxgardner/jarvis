@@ -26,21 +26,23 @@ import uuid
 from pathlib import Path
 
 from app import notify, reports, timeutil
-from app.config import REPO_ROOT
-from app.db import transaction
+from app.config import REPO_ROOT, WORK_DIR
+from app.db import connect, transaction
 
 TIMEOUT_SECONDS = 300  # 5 minutes, per the design doc's starting point
 MAX_ATTEMPTS = 2
 
 MCP_CONFIG = REPO_ROOT / "mcp.json"
 
-# Where jobs run. Deliberately NOT the repo: with full tool access the agent
-# has a shell, and the repo root contains .env — the Anthropic key, the ntfy
-# topic, and the Claude token, all plaintext because FileVault option A rules
-# out the keychain. Running elsewhere means a prompt injection from a fetched
-# page finds a scratch directory rather than credentials. The repo is still
-# readable via --add-dir.
-WORK_DIR = Path.home() / "Library" / "Application Support" / "jarvis" / "work"
+# Where jobs run is `app.config.WORK_DIR`, imported above. Deliberately NOT the
+# repo: with full tool access the agent has a shell, and the repo root contains
+# .env — the Anthropic key, the ntfy topic, and the Claude token, all plaintext
+# because FileVault option A rules out the keychain. Running elsewhere means a
+# prompt injection from a fetched page finds a scratch directory rather than
+# credentials. The repo is still readable via --add-dir.
+#
+# It moved to config so `projects.workspace` can put a project's own directory
+# underneath it without importing this module, which imports half the system.
 
 # Tool allowlist for the deep path. None = no --allowedTools flag, so the agent
 # gets the full default tool set (Bash included), with --permission-mode auto
@@ -72,10 +74,70 @@ your previous report rather than adding to it, so do not refer to what you
 said before or describe what changed."""
 
 
+# What a project's job is told before its ask.
+#
+# The pointer to project_context is the load-bearing line: research started
+# three weeks into a project should see the three weeks of thinking, not only
+# the sentence that kicked it off. The tool is read-only — the agent reads a
+# project and does not write to it, the same human-disposes rule that governs
+# proposals and receipts.
+PROJECT_PREAMBLE = """This work belongs to the project "{name}" (project id {id}).
+{description}
+Your working directory is this project's own. Files you write here persist
+between runs and are visible to the user in the app, so put anything worth
+keeping in a named file rather than only in your reply.
+
+Before you start, call the jarvis MCP tool project_context({id}) to read what
+the user has already thought, found and scheduled for this project.
+
+Your task:
+
+{task}"""
+
+
+def _project(job: dict) -> dict | None:
+    if not job.get("project_id"):
+        return None
+    from projects import store
+
+    conn = connect()
+    try:
+        return store.get(conn, int(job["project_id"]))
+    finally:
+        conn.close()
+
+
+def _work_dir(job: dict) -> Path:
+    """Where the CLI is spawned. A project's own directory when it has one."""
+    from projects import workspace
+
+    project = _project(job)
+    if project is None:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        return WORK_DIR
+    return workspace.ensure(project)
+
+
 def _prompt_for(job: dict) -> str:
-    """The -p argument: a wrapped reply when one is waiting, else the ask."""
+    """The -p argument: a wrapped reply when one is waiting, else the ask.
+
+    A reply gets no project preamble — the session it resumes already has one
+    in its history, and restating it would spend context telling the agent
+    where it is already sitting.
+    """
     reply = (job.get("pending_input") or "").strip()
-    return REPLY_WRAPPER.format(reply=reply) if reply else job["prompt"]
+    if reply:
+        return REPLY_WRAPPER.format(reply=reply)
+
+    project = _project(job)
+    if project is None:
+        return job["prompt"]
+    return PROJECT_PREAMBLE.format(
+        name=project["name"],
+        id=project["id"],
+        description=(project["description"] or "").strip(),
+        task=job["prompt"],
+    )
 
 
 def _claim() -> dict | None:
@@ -192,7 +254,7 @@ def _store_summary(job_id: int, result: str) -> None:
 
 
 def run_job(job: dict) -> dict:
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    work_dir = _work_dir(job)
     session_id = job.get("session_id") or str(uuid.uuid4())
     resume = bool(job.get("session_id"))
 
@@ -208,7 +270,7 @@ def run_job(job: dict) -> dict:
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
-            cwd=str(WORK_DIR),
+            cwd=str(work_dir),
             env=_child_env(job),
             check=False,
         )

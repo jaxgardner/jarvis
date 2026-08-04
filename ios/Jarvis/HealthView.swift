@@ -235,6 +235,12 @@ struct HealthView: View {
             NavRow(title: "Devices") { DevicesView() }
             NavRow(title: "Activity") { ActivityView() }
             NavRow(title: "Review") { ProposalsView() }
+            // Every project screen lists its own reports with a reply box, so
+            // what is left here is the loose ones and the old ones — the same
+            // reason Review sits in this group rather than on the bar.
+            // ownsNavigation: false — this is pushed into the stack above, and
+            // a NavigationStack inside a NavigationStack bounces straight back.
+            NavRow(title: "Reports") { ReportsView(ownsNavigation: false) }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {

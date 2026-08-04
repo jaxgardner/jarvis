@@ -51,6 +51,12 @@ PANTRY_VISION_MODEL = os.getenv("PANTRY_VISION_MODEL", "claude-haiku-4-5").strip
 # reason the database does: they survive a re-clone and are never committed.
 RECEIPT_DIR = DB_PATH.parent / "receipts"
 
+# Where deep jobs run. Deliberately NOT the repo: with full tool access the
+# agent has a shell, and the repo root contains .env. Derived from DB_PATH's
+# parent rather than hardcoded to ~/Library so tests get a throwaway copy —
+# the default resolves to exactly the path worker/run.py used to hardcode.
+WORK_DIR = DB_PATH.parent / "work"
+
 # Local hour at which the day-before expiry push goes out. 17:00 is late
 # enough that you can still cook or shop, early enough to act on.
 PANTRY_EXPIRY_HOUR = int(os.getenv("PANTRY_EXPIRY_HOUR", "17"))
