@@ -497,6 +497,31 @@ def _days_phrase(days: int) -> str:
     return f"{days} days"
 
 
+# Enough to answer a follow-up, bounded so a 14 KB report cannot crowd out the
+# notes and mail that the same question may also need.
+_REPORT_FALLBACK_CHARS = 1500
+
+
+def _report_line(conn, job_id) -> str | None:
+    """One context line about a report, or None when there is nothing to say.
+
+    Prefers the stored summary and falls back to the head of the report
+    itself, which is what lets reports that finished before summaries existed
+    still answer questions.
+    """
+    if job_id is None:
+        return None
+    row = conn.execute(
+        "SELECT prompt, summary, result FROM jobs WHERE id = ?", (int(job_id),)
+    ).fetchone()
+    if row is None:
+        return None
+    body = (row["summary"] or "").strip() or (row["result"] or "").strip()
+    if not body:
+        return None
+    return f"REPORT ({row['prompt']}): {body[:_REPORT_FALLBACK_CHARS]}"
+
+
 def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # Fast path: the router already told us the question's shape in the call
     # we had to make anyway, so common questions are answered by formatting
@@ -515,6 +540,13 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
         if answer:
             return answer
 
+    # A named report leads the context. Seeded here rather than appended below
+    # so it survives whatever else the question turns up.
+    lines: list[str] = []
+    report = _report_line(conn, args.get("job_id"))
+    if report:
+        lines.append(report)
+
     # Floor the window at 8 days regardless of what the router asked for.
     # The window starts at *today's* midnight, so window_days=1 — which the
     # router naturally picks for "what's on tomorrow" — produces a window that
@@ -525,7 +557,6 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     days = max(8, int(args.get("window_days") or 7))
     agenda = agenda_rows(conn, tz_name, days)
 
-    lines: list[str] = []
     for e in agenda["events"]:
         when = timeutil.speak_datetime(e["starts_at"], tz_name, bool(e["all_day"]))
         loc = f" at {e['location']}" if e["location"] else ""

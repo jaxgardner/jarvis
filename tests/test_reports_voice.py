@@ -380,3 +380,94 @@ def test_escalate_with_an_unknown_job_id_starts_new_work(spoken, db):
     assert rows(db, "SELECT prompt FROM jobs WHERE id = ?", (body["job_id"],))[0][
         "prompt"
     ] == "research desks"
+
+
+# ── asking what a report said ─────────────────────────────
+
+
+@pytest.fixture
+def captured_answer(monkeypatch):
+    """Capture the context handed to router.answer instead of calling it."""
+    from app import router
+
+    seen = {}
+
+    def fake_answer(question, context, tz_name):
+        seen["question"] = question
+        seen["context"] = context
+        return "It said vendor B."
+
+    monkeypatch.setattr(router, "answer", fake_answer)
+    return seen
+
+
+def test_query_with_a_job_id_puts_the_summary_in_context(db, captured_answer):
+    from app import handlers
+    from app.db import transaction
+
+    job_id = make_job(db)
+    with transaction() as conn:
+        handlers.query(
+            conn,
+            None,
+            {"question": "what did it say about pricing", "job_id": job_id},
+            "America/Denver",
+        )
+
+    assert "REPORT (Compare the three vendors):" in captured_answer["context"]
+    assert "B is cheapest at $4,200/yr" in captured_answer["context"]
+
+
+def test_query_falls_back_to_the_report_when_there_is_no_summary(db, captured_answer):
+    """Old reports and failed summarizations both leave NULL. Falling back is
+    what makes a backfill script unnecessary."""
+    from app import handlers
+    from app.db import transaction
+
+    job_id = make_job(db, summary=None, result="The raw report body.")
+    with transaction() as conn:
+        handlers.query(
+            conn, None, {"question": "what did it say", "job_id": job_id}, "America/Denver"
+        )
+
+    assert "The raw report body." in captured_answer["context"]
+
+
+def test_query_truncates_a_long_report_it_falls_back_to(db, captured_answer):
+    from app import handlers
+    from app.db import transaction
+
+    job_id = make_job(db, summary=None, result="x" * 5000)
+    with transaction() as conn:
+        handlers.query(
+            conn, None, {"question": "what did it say", "job_id": job_id}, "America/Denver"
+        )
+
+    assert len(captured_answer["context"]) < 2500
+
+
+def test_query_with_an_unknown_job_id_still_answers(db, captured_answer):
+    from app import handlers
+    from app.db import transaction
+
+    with transaction() as conn:
+        handlers.query(
+            conn, None, {"question": "what did it say", "job_id": 999}, "America/Denver"
+        )
+
+    assert "REPORT" not in captured_answer["context"]
+
+
+def test_query_omits_the_line_for_a_report_with_nothing_in_it(db, captured_answer):
+    """A failed job has neither summary nor result. An empty REPORT () line
+    would invite the model to invent what belongs there."""
+    from app import handlers
+    from app.db import transaction
+
+    job_id = make_job(db, status="failed", summary=None, result=None)
+    with transaction() as conn:
+        handlers.query(
+            conn, None, {"question": "what did it say", "job_id": job_id}, "America/Denver"
+        )
+
+    assert "REPORT" not in captured_answer["context"]

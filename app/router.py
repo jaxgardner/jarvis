@@ -181,6 +181,15 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "question": {"type": "string"},
+                "job_id": {
+                    "type": "integer",
+                    "description": (
+                        "The id of a report from REPORTS, when the question is "
+                        "about what one of them found — 'what did that report "
+                        "say about pricing', 'what did you find out'. Omit "
+                        "otherwise. Use an id only if it appears in REPORTS."
+                    ),
+                },
                 "kind": {
                     "type": "string",
                     "enum": ["agenda", "when", "recall", "pantry", "other"],
