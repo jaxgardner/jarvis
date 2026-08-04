@@ -112,6 +112,11 @@ class SnoozeRequest(BaseModel):
     tz: str | None = None
 
 
+class TurnReport(BaseModel):
+    utterance_id: int
+    turn_ms: int
+
+
 @app.get("/health")
 def health() -> dict:
     """Liveness for launchd, uptime checks, and the cellular smoke test."""
@@ -996,6 +1001,27 @@ def reply_to_job(job_id: int, req: JobReply) -> dict:
     if outcome == "live":
         raise HTTPException(status_code=409, detail="job is already running")
     return job(job_id)
+
+
+@app.post("/turns", status_code=204)
+def report_turn(report: TurnReport, _: Principal = Depends(require_token)) -> Response:
+    """What the turn actually cost, measured on the phone.
+
+    From the endpointer firing to the first audio buffer being scheduled —
+    the whole thing, including the endpointer before /say and the synthesis
+    after it returns, neither of which latency_ms can see.
+
+    Fire-and-forget, and deliberately reported after playback has started so
+    it cannot sit on the critical path it is measuring. An unknown id is
+    ignored rather than raised: this arrives after the user has been spoken
+    to, so there is nothing a failure could usefully change.
+    """
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE utterances SET turn_ms = ? WHERE id = ?",
+            (report.turn_ms, report.utterance_id),
+        )
+    return Response(status_code=204)
 
 
 @app.get("/metrics", dependencies=[Depends(require_token)])

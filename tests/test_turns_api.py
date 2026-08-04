@@ -9,6 +9,8 @@ import sqlite3
 
 import pytest
 
+from app import config
+from app.db import connect
 from tests.helpers import apply_migrations
 
 
@@ -40,3 +42,53 @@ def test_columns_are_nullable(migrated):
     ).fetchone()
     assert row["turn_ms"] is None
     assert row["timings"] is None
+
+
+@pytest.fixture(scope="module")
+def client():
+    """The canonical shape in this repo — see tests/test_utterances.py. The
+    token goes on the client, so no separate auth fixture is needed."""
+    from fastapi.testclient import TestClient
+
+    import migrate
+    from app.main import app
+
+    assert migrate.migrate() == 0, "migrations failed"
+    with TestClient(app) as c:
+        c.headers["Authorization"] = f"Bearer {config.jarvis_token()}"
+        yield c
+
+
+def _utterance(client) -> int:
+    """A row to attach a turn to, written without a model call."""
+    conn = connect()
+    try:
+        row_id = conn.execute(
+            "INSERT INTO utterances (raw_text, client) VALUES ('testing','ios')"
+        ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return int(row_id)
+
+
+def test_turn_is_recorded(client):
+    utterance_id = _utterance(client)
+    resp = client.post("/turns", json={"utterance_id": utterance_id, "turn_ms": 1840})
+    assert resp.status_code == 204
+
+    conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT turn_ms FROM utterances WHERE id = ?", (utterance_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["turn_ms"] == 1840
+
+
+def test_unknown_id_is_not_an_error(client):
+    """A late or duplicated report is not worth a failure path. The phone has
+    already spoken by the time it sends this; nothing it hears back matters."""
+    resp = client.post("/turns", json={"utterance_id": 999999, "turn_ms": 1000})
+    assert resp.status_code == 204
