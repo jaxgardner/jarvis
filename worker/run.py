@@ -25,7 +25,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from app import notify, timeutil
+from app import notify, reports, timeutil
 from app.config import REPO_ROOT
 from app.db import transaction
 
@@ -172,6 +172,25 @@ def _requeue(job_id: int, error: str) -> None:
         )
 
 
+def _store_summary(job_id: int, result: str) -> None:
+    """Write the spoken-answer summary, or leave the column NULL.
+
+    Belt and braces: reports.summarize already swallows its own failures, but
+    this runs after the report is saved and before the push is sent, and
+    neither of those may be taken down by the least important step in the
+    sequence.
+    """
+    try:
+        summary = reports.summarize(result)
+    except Exception as exc:  # noqa: BLE001
+        print(f"job {job_id}: summary failed: {exc}", file=sys.stderr)
+        return
+    if not summary:
+        return
+    with transaction() as conn:
+        conn.execute("UPDATE jobs SET summary = ? WHERE id = ?", (summary, job_id))
+
+
 def run_job(job: dict) -> dict:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     session_id = job.get("session_id") or str(uuid.uuid4())
@@ -214,6 +233,7 @@ def run_job(job: dict) -> dict:
 
     result = str(payload.get("result", "")).strip()
     _finish(job["id"], "done", result, None)
+    _store_summary(job["id"], result)
 
     # Permission denials aren't failures, but they explain a thin answer —
     # surface them rather than leaving you to wonder why it gave up.

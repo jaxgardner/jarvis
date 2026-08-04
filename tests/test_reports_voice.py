@@ -153,3 +153,79 @@ def test_summarize_does_not_call_the_model_for_an_empty_report(monkeypatch):
 
     monkeypatch.setattr(router, "_CLIENT", Exploding())
     assert reports.summarize("   ") is None
+
+
+# ── the worker writes them ────────────────────────────────
+
+
+@pytest.fixture
+def worker_db(db, monkeypatch):
+    """The worker with its push stubbed, pointed at the test database."""
+    from worker import run as worker
+
+    monkeypatch.setattr(worker.notify, "push", lambda *a, **k: True)
+    return worker
+
+
+def test_a_finished_job_gets_a_summary(worker_db, db, fake_model):
+    fake_model("Compared three vendors; B is cheapest at $4,200/yr.")
+    job_id = make_job(db, summary=None)
+
+    worker_db._store_summary(job_id, "## Vendors\n| B | $4,200 |")
+
+    assert (
+        rows(db, "SELECT summary FROM jobs WHERE id = ?", (job_id,))[0]["summary"]
+        == "Compared three vendors; B is cheapest at $4,200/yr."
+    )
+
+
+def test_a_failed_summary_leaves_the_column_null_and_does_not_raise(
+    worker_db, db, monkeypatch
+):
+    """The report is saved and the push is owed. Summarizing is the least
+    important thing happening at this moment and must behave like it."""
+    from app import reports
+
+    monkeypatch.setattr(reports, "summarize", lambda result: None)
+    job_id = make_job(db, summary=None)
+
+    worker_db._store_summary(job_id, "anything")
+
+    assert rows(db, "SELECT summary FROM jobs WHERE id = ?", (job_id,))[0][
+        "summary"
+    ] is None
+
+
+def test_a_summary_that_raises_still_does_not_reach_the_caller(
+    worker_db, db, monkeypatch
+):
+    from app import reports
+
+    def explode(result):
+        raise RuntimeError("upstream is down")
+
+    monkeypatch.setattr(reports, "summarize", explode)
+    job_id = make_job(db, summary=None)
+
+    worker_db._store_summary(job_id, "anything")  # must not raise
+
+    assert rows(db, "SELECT summary FROM jobs WHERE id = ?", (job_id,))[0][
+        "summary"
+    ] is None
+
+
+def test_a_failing_job_is_never_summarized(worker_db, db, monkeypatch):
+    """A failed run has no result to summarize, and paying for a model call
+    to describe nothing is the kind of waste that hides in a retry loop."""
+    called = []
+
+    monkeypatch.setattr(
+        worker_db, "_store_summary", lambda job_id, result: called.append(job_id)
+    )
+    monkeypatch.setattr(worker_db, "MAX_ATTEMPTS", 1)
+
+    worker_db._handle_failure(
+        {"id": make_job(db, status="running"), "attempts": 1}, "timed out"
+    )
+
+    assert called == []
