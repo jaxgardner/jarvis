@@ -74,6 +74,7 @@ wrong-sounding voice can be traced to whichever half is wrong.
 | `AgendaView.swift` | What's coming up; swipe a reminder to snooze or complete |
 | `ActivityView.swift` | What you said and what it changed; swipe-to-undo |
 | `ReportsView.swift` | Deep-path history, with live refresh while one runs |
+| `ReplyBox.swift` | Answering a report that asked you something; type or dictate |
 | `Markdown.swift` | Block-level markdown, so a deep-path result reads as one |
 | `MicOrb.swift` | The one control on the Talk screen |
 | `HealthView.swift` | p50/p95 against the 2s budget, plus token spend |

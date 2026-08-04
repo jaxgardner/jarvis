@@ -253,6 +253,45 @@ over HTTP; `/health` reports both numbers.
   because the first is what a reply costs and the second is what the phone
   actually waits for. A wide gap means chunking is working.
 
+## Replying to a report
+
+Deep reports routinely end in a question. Answering one re-queues **the same
+job** against its stored `session_id`; there is one report per task however
+many times you answer it.
+
+- **The job was never blocked.** `claude -p` runs to completion and exits, so
+  a report that "asks a question" is a `done` row whose `result` ends in one.
+  Replying starts a second run of that row, it does not unblock a process.
+- **`prompt` is immutable; `pending_input` is transient.** The worker passes
+  `prompt` as `-p`, so the reply needs its own column or the original ask —
+  the only record of what the report is *for* — is destroyed.
+- **The resumed run is told to restate the whole report**, self-contained,
+  with no reference to what it said before. That instruction is what makes
+  overwriting `result` safe, and it is why there is no version history, no
+  diff view, and nothing to reconcile. `worker.REPLY_WRAPPER` owns the
+  wording, in the worker rather than at each call site, so all three surfaces
+  produce identically-shaped runs.
+- **A reply resets `attempts` to 0.** `MAX_ATTEMPTS` counts across the life of
+  the row, so a job that already failed once and recovered would give your
+  reply no retries at all.
+- **Replying to a `queued` or `running` job is a 409.** You cannot resume a
+  session mid-run, and a reply that vanished into a job already working is the
+  worst failure this feature has available.
+- **`result` is not cleared on reply.** You keep reading the old report while
+  the rerun works; the worker overwrites it on finish.
+- **Nothing detects that a report is asking you something** — no marker the
+  agent must remember to emit, no classifier call on every job. Every finished
+  report can be replied to. You find out by reading it, which you were doing
+  anyway.
+- **A spoken follow-up takes the same path.** `escalate(is_follow_up)` resumes
+  the most recent finished job in place rather than inserting a row that
+  copies its session. It used to fork; two mechanics meant the Reports list
+  held two kinds of thing depending on how you happened to speak.
+- **An expired Claude Code session is a normal failure.** `--resume` fails, the
+  run retries and lands in `failed` with the CLI's message on the detail view.
+  Ask again from scratch. Tracking session lifetime we do not control is not
+  worth it.
+
 ## API contracts
 
 ### `POST /say`
@@ -284,6 +323,7 @@ engine — no markdown, no lists, no emoji.
 | `POST /reminders/{id}/snooze`, `/ack` | Notification action buttons |
 | `GET /activity` | Utterances + what each one changed; drives swipe-to-undo |
 | `GET /jobs` | Deep-path history (results truncated; full text on `/jobs/{id}`) |
+| `POST /jobs/{id}/reply` | Answer a report that asked you something; resumes it in place |
 | `GET /proposals` | Pending email extractions awaiting review |
 | `POST /proposals/{id}/accept`, `/reject` | Dispose of one. Accept writes through `mutations` |
 | `GET /inbox` | Recent ingested mail; `?q=` searches, `?unread_only=` filters |
