@@ -105,7 +105,7 @@ def test_say_records_tokens_on_the_utterance(client, db, monkeypatch):
     monkeypatch.setattr(
         router,
         "route",
-        lambda text, tz, reports=(), projects=(), today="": (usage.record(fake_usage(2557, 95)), ("add_note", {"body": text}))[1],
+        lambda text, tz, reports=(), projects=(), today="", context="": (usage.record(fake_usage(2557, 95)), ("add_note", {"body": text}))[1],
     )
     response = client.post("/say", json={"text": "milk", "client": "test"})
     assert response.status_code == 200, response.text
@@ -122,7 +122,7 @@ def test_a_two_hop_query_bills_both_calls(client, db, monkeypatch):
     monkeypatch.setattr(
         router,
         "route",
-        lambda text, tz, reports=(), projects=(), today="": (
+        lambda text, tz, reports=(), projects=(), today="", context="": (
             usage.record(fake_usage(2557, 80)),
             ("query", {"question": text, "kind": "other"}),
         )[1],
@@ -147,7 +147,7 @@ def test_metrics_reports_spend(client, db, monkeypatch):
     monkeypatch.setattr(
         router,
         "route",
-        lambda text, tz, reports=(), projects=(), today="": (usage.record(fake_usage(2000, 100)), ("add_note", {"body": text}))[1],
+        lambda text, tz, reports=(), projects=(), today="", context="": (usage.record(fake_usage(2000, 100)), ("add_note", {"body": text}))[1],
     )
     client.post("/say", json={"text": "milk", "client": "test"})
 
@@ -169,7 +169,7 @@ def test_pre_migration_rows_are_excluded_not_counted_as_zero(client, db, monkeyp
     monkeypatch.setattr(
         router,
         "route",
-        lambda text, tz, reports=(), projects=(), today="": (usage.record(fake_usage(2000, 100)), ("add_note", {"body": text}))[1],
+        lambda text, tz, reports=(), projects=(), today="", context="": (usage.record(fake_usage(2000, 100)), ("add_note", {"body": text}))[1],
     )
     client.post("/say", json={"text": "milk", "client": "test"})
 

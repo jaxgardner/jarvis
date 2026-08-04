@@ -266,7 +266,10 @@ TOOLS: list[dict] = [
             "notes, or people. The user must be asking for information: "
             "'what's on tomorrow', 'when is my dentist appointment', 'what did "
             "I say about Sarah'. A statement that something changed is not a "
-            "question — do not use this tool for it."
+            "question — do not use this tool for it. Use it whenever the "
+            "answer is not already in front of you: when the CONTEXT block "
+            "holds the note being asked about, `answer` is the tool, and this "
+            "one only repeats a search that has already happened."
         ),
         "input_schema": {
             "type": "object",
@@ -430,13 +433,16 @@ TOOLS: list[dict] = [
     {
         "name": "answer",
         "description": (
-            "Answer a question directly, out loud, from the TODAY block in "
-            "the system prompt. Use this only when TODAY already contains "
-            "what was asked — the day's mail summary, what is on the "
-            "calendar, what reminders are due, what food is about to spoil, "
-            "what reports have just finished. If answering needs a note, an "
-            "email, a project or an older report, use query instead. This is "
-            "the one tool whose output is spoken to the user verbatim."
+            "Answer a question directly, out loud, from the TODAY or CONTEXT "
+            "blocks in the system prompt. Use it whenever either of them "
+            "already contains what was asked — TODAY holds the day's mail "
+            "summary, the calendar, reminders due, food about to spoil and "
+            "reports just finished; CONTEXT holds notes and mail already "
+            "searched for this utterance, so a question about a stored note "
+            "whose text is sitting in CONTEXT is answered here rather than "
+            "searched for again. If neither block bears on the question, use "
+            "query. This is the one tool whose output is spoken to the user "
+            "verbatim."
         ),
         "input_schema": {
             "type": "object",

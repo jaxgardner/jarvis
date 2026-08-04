@@ -122,9 +122,19 @@ def test_the_eight_utterances(client):
     finally:
         conn.close()
 
-    # 7. retrieval by subject, not by time window
+    # 7. retrieval by subject, not by time window.
+    #
+    # Either tool is correct here, for the reason step 3 already gives. The
+    # Sarah note was written at #4, so pre-retrieval puts it in CONTEXT and
+    # the router can speak it in the call it had to make anyway; on another
+    # run the same question takes `query`'s recall path and pays a second
+    # call for the same sentence. Which one you get is a live model's choice
+    # and it moved under this test while Part 1 was being written.
+    #
+    # What must not vary is the stored fact coming back, which is what this
+    # step is really guarding — and what `query` was standing in for.
     r = say(client, "what did I say about Sarah")
-    assert intent_of(r["utterance_id"]) == "query"
+    assert intent_of(r["utterance_id"]) in ("query", "answer")
     assert "theo" in r["reply"].lower(), f"did not surface the stored fact: {r['reply']}"
 
     # 8. cancelling an existing item
