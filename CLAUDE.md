@@ -730,6 +730,23 @@ given.
   `ntfy`, so a fresh checkout without a `.env` behaves differently from the
   Mini. `ntfy,apns` fans out to both, which is how the cutover was done.
   If ntfy is in use, its topic name is the only secret — treat it as a password.
+- **A notification's icon is the app's own icon drawn at ~20pt, and the
+  artwork has to survive that.** The payload cannot choose one; there is no
+  icon field in `aps`. "Notifications show the default icon" turned out to
+  mean the icon reads fine at the Home Screen's 60pt and collapses into a
+  dark, featureless square at the 60px a banner draws on a 3x phone — the
+  rings mush together and the corner brackets disappear. Worth not
+  re-investigating: it is **not** a missing rendition and **not** a stale
+  icon cache. The catalog compiles without warnings, `Assets.car` carries the
+  icon, `devicectl device info apps` confirmed the phone was running the
+  right build, and a delete-and-reinstall changed nothing. `icon-1024-dark.png`
+  is byte-identical to the light one, so dark mode buys no extra contrast
+  either. The fix is redrawing for the small size, not build settings.
+- **`JARVIS_BUILD` in `Config.xcconfig` is the build number.** It arrived
+  while chasing the icon above on a cache theory that was then disproved, and
+  it stays on its own merits: `CURRENT_PROJECT_VERSION` had been frozen at `1`
+  since the project was created, so every install looked like the same build
+  to the OS.
 - **`notify.push()` returns a bool and never raises.** `scheduler/run.py` calls
   it in a loop over every due reminder: `False` requeues that one reminder,
   where an exception would abort the tick and take every *other* due reminder
