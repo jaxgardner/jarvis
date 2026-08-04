@@ -812,24 +812,6 @@ def reply_to_job(conn, job_id: int, text: str) -> str:
     return "ok"
 
 
-def resume_latest_job(conn, text: str) -> int | None:
-    """Re-queue the most recent finished job with `text` as the reply.
-
-    What a spoken follow-up resolves to. `session_id IS NOT NULL` because
-    resuming the earlier conversation is the entire point — a job that never
-    got a session would start cold with no idea what "the second one" was.
-    """
-    row = conn.execute(
-        """SELECT id FROM jobs
-             WHERE status = 'done' AND session_id IS NOT NULL
-             ORDER BY id DESC LIMIT 1"""
-    ).fetchone()
-    if row is None:
-        return None
-    job_id = int(row["id"])
-    return job_id if reply_to_job(conn, job_id, text) == "ok" else None
-
-
 # `escalate` is handled in main.py — it enqueues a job rather than writing a
 # domain row, so it doesn't share this signature.
 FAST_HANDLERS = {

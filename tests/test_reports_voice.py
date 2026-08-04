@@ -302,3 +302,81 @@ def test_the_calendar_block_still_survives():
     from app import router
 
     assert "CALENDAR" in router.system_prompt("America/Denver", [])
+
+
+# ── escalate by id ────────────────────────────────────────
+
+
+@pytest.fixture
+def client(db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app)
+    c.headers.update({"Authorization": f"Bearer {SHARED}"})
+    return c
+
+
+@pytest.fixture
+def spoken(client, monkeypatch):
+    """A /say client whose router answer is ours to choose."""
+    from app import router
+
+    def route_as(tool, args):
+        monkeypatch.setattr(router, "route", lambda text, tz, reports=(): (tool, args))
+
+    return client, route_as
+
+
+def test_escalate_with_a_job_id_resumes_that_report(spoken, db):
+    client, route_as = spoken
+    older = make_job(db, prompt="older")
+    make_job(db, prompt="newer")
+    route_as("escalate", {"restated_task": "go with B", "job_id": older})
+
+    body = client.post("/say", json={"text": "go with B", "client": "ios"}).json()
+
+    assert body["job_id"] == older
+    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 2
+    resumed = rows(db, "SELECT status, pending_input FROM jobs WHERE id = ?", (older,))[0]
+    assert resumed["status"] == "queued"
+    assert resumed["pending_input"] == "go with B"
+
+
+def test_escalate_without_a_job_id_starts_new_work(spoken, db):
+    client, route_as = spoken
+    existing = make_job(db)
+    route_as("escalate", {"restated_task": "research desks"})
+
+    body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
+
+    assert body["job_id"] != existing
+    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 2
+
+
+def test_escalate_on_a_live_report_says_so_and_changes_nothing(spoken, db):
+    """Answering something already working should tell you, not quietly start
+    a second piece of work you did not ask for."""
+    client, route_as = spoken
+    job_id = make_job(db, status="running")
+    route_as("escalate", {"restated_task": "go with B", "job_id": job_id})
+
+    body = client.post("/say", json={"text": "go with B", "client": "ios"}).json()
+
+    assert "still working" in body["reply"]
+    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 1
+    assert rows(db, "SELECT pending_input FROM jobs WHERE id = ?", (job_id,))[0][
+        "pending_input"
+    ] is None
+
+
+def test_escalate_with_an_unknown_job_id_starts_new_work(spoken, db):
+    client, route_as = spoken
+    route_as("escalate", {"restated_task": "research desks", "job_id": 999})
+
+    body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
+
+    assert rows(db, "SELECT prompt FROM jobs WHERE id = ?", (body["job_id"],))[0][
+        "prompt"
+    ] == "research desks"

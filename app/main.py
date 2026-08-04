@@ -268,29 +268,30 @@ def _say(req: SayRequest) -> dict:
 
     if tool == "escalate":
         task = args.get("restated_task", req.text)
+        named = args.get("job_id")
+        outcome = "missing"
         with transaction() as conn:
-            # A follow-up resumes the report it belongs to, rewriting it in
-            # place — the same thing the reply box and the notification action
-            # do. "What about the second one" was never separate work, and one
-            # mechanic means the Reports list holds one kind of thing.
-            job_id = (
-                handlers.resume_latest_job(conn, task)
-                if args.get("is_follow_up")
-                else None
-            )
-            resumed = job_id is not None
-            if job_id is None:
+            # A named report is answered through the same helper the reply box
+            # and the notification action use, so a spoken answer and a typed
+            # one are indistinguishable by the time they reach the database.
+            if named is not None:
+                outcome = handlers.reply_to_job(conn, int(named), task)
+            if outcome in ("ok", "live"):
+                # Both mean the named report is the answer to "which job is
+                # this about" — one because we re-queued it, one because it
+                # was already working.
+                job_id = int(named)
+            else:
                 job_id = int(
                     conn.execute(
                         "INSERT INTO jobs (utterance_id, prompt) VALUES (?,?)",
                         (utterance_id, task),
                     ).lastrowid
                 )
-        reply = (
-            "Picking up where we left off. I'll ping you."
-            if resumed
-            else "On it. I'll ping you when it's done."
-        )
+        reply = {
+            "ok": "Picking up where we left off. I'll ping you.",
+            "live": "That one's still working. I'll leave it be.",
+        }.get(outcome, "On it. I'll ping you when it's done.")
         latency = _finish(utterance_id, "deep", tool, reply, started)
         synth.prefetch(reply)
         return {

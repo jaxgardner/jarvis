@@ -300,13 +300,14 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "description": "The task restated clearly and self-containedly.",
                 },
-                "is_follow_up": {
-                    "type": "boolean",
+                "job_id": {
+                    "type": "integer",
                     "description": (
-                        "True when this refers back to a deep task already done "
-                        "— 'what did you find about X', 'go deeper on that', "
-                        "'what about the second one'. Lets the agent resume the "
-                        "earlier conversation instead of starting cold."
+                        "The id of an existing report from the REPORTS list, "
+                        "when the user is answering it or asking it to carry "
+                        "on — 'go with the second one', 'answer the vendor "
+                        "report with B', 'go deeper on that'. Omit for new "
+                        "work. Use an id only if it appears in REPORTS."
                     ),
                 },
             },

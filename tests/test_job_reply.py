@@ -186,44 +186,6 @@ def test_replying_to_a_job_that_does_not_exist(db):
         assert handlers.reply_to_job(conn, 999, "Go with B") == "missing"
 
 
-def test_resume_latest_picks_the_most_recent_finished_job(db):
-    from app import handlers
-    from app.db import transaction
-
-    make_job(db, prompt="older", session_id="sess-old")
-    newest = make_job(db, prompt="newer", session_id="sess-new")
-
-    with transaction() as conn:
-        assert handlers.resume_latest_job(conn, "what about the second one") == newest
-
-    assert (
-        rows(db, "SELECT pending_input FROM jobs WHERE id = ?", (newest,))[0][
-            "pending_input"
-        ]
-        == "what about the second one"
-    )
-
-
-def test_resume_latest_skips_a_job_with_no_session(db):
-    """Resuming is the whole point of a follow-up; a job with no session id
-    would start cold with no idea what "the second one" was."""
-    from app import handlers
-    from app.db import transaction
-
-    make_job(db, session_id=None)
-
-    with transaction() as conn:
-        assert handlers.resume_latest_job(conn, "go deeper") is None
-
-
-def test_resume_latest_returns_none_when_there_is_nothing_to_resume(db):
-    from app import handlers
-    from app.db import transaction
-
-    with transaction() as conn:
-        assert handlers.resume_latest_job(conn, "go deeper") is None
-
-
 # ── the endpoint ──────────────────────────────────────────
 
 
@@ -287,44 +249,31 @@ def spoken(client, monkeypatch):
     from app import router
 
     def route_as(tool, args):
-        monkeypatch.setattr(router, "route", lambda text, tz: (tool, args))
+        monkeypatch.setattr(router, "route", lambda text, tz, reports=(): (tool, args))
 
     return client, route_as
 
 
-def test_a_spoken_follow_up_resumes_the_report_it_belongs_to(spoken, db):
-    """One mechanic however you answer. Left as an insert, the Reports list
-    would hold two different kinds of thing depending on how you spoke."""
+def test_a_spoken_answer_reaches_the_same_helper_as_a_typed_one(spoken, db):
+    """The point of routing voice through reply_to_job: one mechanic, so the
+    database cannot tell how you answered."""
     client, route_as = spoken
     job_id = make_job(db)
-    route_as("escalate", {"restated_task": "go with B", "is_follow_up": True})
+    route_as("escalate", {"restated_task": "go with B", "job_id": job_id})
 
-    body = client.post("/say", json={"text": "go with B", "client": "ios"}).json()
+    client.post("/say", json={"text": "go with B", "client": "ios"})
 
-    assert body["job_id"] == job_id
-    assert rows(db, "SELECT COUNT(*) AS n FROM jobs")[0]["n"] == 1
     job = rows(db, "SELECT status, pending_input FROM jobs WHERE id = ?", (job_id,))[0]
     assert job["status"] == "queued"
     assert job["pending_input"] == "go with B"
 
 
-def test_a_spoken_follow_up_with_nothing_to_resume_starts_a_job(spoken, db):
-    client, route_as = spoken
-    route_as("escalate", {"restated_task": "research desks", "is_follow_up": True})
-
-    body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
-
-    job = rows(db, "SELECT prompt, status FROM jobs WHERE id = ?", (body["job_id"],))[0]
-    assert job["prompt"] == "research desks"
-    assert job["status"] == "queued"
-
-
 def test_a_new_deep_task_still_inserts_its_own_job(spoken, db):
-    """Only follow-ups resume. A fresh task must not overwrite the last
+    """Only a named report resumes. A fresh task must not overwrite the last
     report you asked for."""
     client, route_as = spoken
     existing = make_job(db)
-    route_as("escalate", {"restated_task": "research desks", "is_follow_up": False})
+    route_as("escalate", {"restated_task": "research desks"})
 
     body = client.post("/say", json={"text": "research desks", "client": "ios"}).json()
 
