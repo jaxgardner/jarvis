@@ -628,6 +628,49 @@ def _report_line(conn, job_id) -> str | None:
     return f"REPORT ({row['prompt']}): {body[:_REPORT_FALLBACK_CHARS]}"
 
 
+def agenda_lines(agenda: dict, tz_name: str) -> list[str]:
+    """Events and reminders as context lines.
+
+    Shared by `query` and by `today_block` so the router and the answering
+    model are shown the day in identical words. Two formatters would drift,
+    and the drift would only ever show up as an answer that changed depending
+    on which path it took.
+    """
+    lines = []
+    for e in agenda["events"]:
+        when = timeutil.speak_datetime(e["starts_at"], tz_name, bool(e["all_day"]))
+        loc = f" at {e['location']}" if e["location"] else ""
+        lines.append(f"EVENT: {e['title']} — {when}{loc}")
+    for r in agenda["reminders"]:
+        lines.append(
+            f"REMINDER: {r['body']} — {timeutil.speak_datetime(r['fire_at'], tz_name)}"
+        )
+    return lines
+
+
+def today_block(conn, tz_name: str) -> str:
+    """The ambient day, for the router prompt. Empty string when there is none.
+
+    This is what lets a question about today be answered in one model call
+    instead of two. It is deliberately *question-independent* — the same three
+    parts a brief is made of, with no search over the user's words — because
+    it is built before the router has read the utterance. A question needing
+    anything else still routes to `query`, which searches notes and mail and
+    then makes the second call.
+
+    Costs one extra `agenda_rows` read on every `/say`, inside the transaction
+    that was already open. CLAUDE.md records the four existing SQLite
+    round trips as inside the noise; measured, this block builds in ~3ms.
+    """
+    lines = []
+    brief = _brief_line(conn, tz_name)
+    if brief:
+        lines.append(brief)
+    lines.extend(agenda_lines(agenda_rows(conn, tz_name, 8), tz_name))
+    lines.extend(_needs_doing(conn, tz_name))
+    return "\n".join(lines)
+
+
 def _brief_line(conn, tz_name: str) -> str | None:
     """Today's mail summary, as one context line.
 
@@ -749,16 +792,7 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # be up to 13 days out. Over-fetching costs a few context tokens; under-
     # fetching costs a wrong answer.
     days = max(8, int(args.get("window_days") or 7))
-    agenda = agenda_rows(conn, tz_name, days)
-
-    for e in agenda["events"]:
-        when = timeutil.speak_datetime(e["starts_at"], tz_name, bool(e["all_day"]))
-        loc = f" at {e['location']}" if e["location"] else ""
-        lines.append(f"EVENT: {e['title']} — {when}{loc}")
-    for r in agenda["reminders"]:
-        lines.append(
-            f"REMINDER: {r['body']} — {timeutil.speak_datetime(r['fire_at'], tz_name)}"
-        )
+    lines.extend(agenda_lines(agenda_rows(conn, tz_name, days), tz_name))
 
     # Notes are searched, not windowed — "what did I say about Sarah" has no
     # time bound. FTS5 first; fall back to LIKE when the question tokenizes to
@@ -1039,7 +1073,25 @@ def reply_to_job(conn, job_id: int, text: str) -> str:
 
 # `escalate` is handled in main.py — it enqueues a job rather than writing a
 # domain row, so it doesn't share this signature.
+def answer(conn, utterance_id: int, args: dict, tz_name: str) -> str:
+    """The router answered from TODAY itself. Nothing to do but speak it.
+
+    This is the one tool whose output reaches the user verbatim, and it exists
+    to remove a whole model call: a question about today used to cost `route`
+    then `router.answer`, two sequential round trips against a ~660ms floor
+    each. The router already has the day in its prompt, so the second call was
+    buying a rephrasing of context it had also been given.
+
+    Squeezed rather than trusted — `/say` promises a single plain-text line
+    safe to hand to a TTS engine, and a stray newline would be spoken as a
+    pause that is not in the sentence.
+    """
+    reply = " ".join(str(args.get("reply") or "").split())
+    return reply or "Sorry — I didn't catch that."
+
+
 FAST_HANDLERS = {
+    "answer": answer,
     "add_event": add_event,
     "add_reminder": add_reminder,
     "add_note": add_note,

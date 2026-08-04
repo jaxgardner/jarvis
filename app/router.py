@@ -427,38 +427,61 @@ TOOLS: list[dict] = [
             "required": ["restated_task"],
         },
     },
+    {
+        "name": "answer",
+        "description": (
+            "Answer a question directly, out loud, from the TODAY block in "
+            "the system prompt. Use this only when TODAY already contains "
+            "what was asked — the day's mail summary, what is on the "
+            "calendar, what reminders are due, what food is about to spoil, "
+            "what reports have just finished. If answering needs a note, an "
+            "email, a project or an older report, use query instead. This is "
+            "the one tool whose output is spoken to the user verbatim."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reply": {
+                    "type": "string",
+                    "description": (
+                        "The spoken answer. One or two plain sentences, no "
+                        "markdown, no lists, no emoji, times said the way a "
+                        "person would say them."
+                    ),
+                }
+            },
+            "required": ["reply"],
+        },
+    },
 ]
 
-# No cache_control here, and the reason is measured rather than assumed.
+# The cacheable prefix is tools, then system, in that order — so everything up
+# to the first `cache_control` marker has to be byte-stable.
 #
-# The cacheable prefix is the tools block and nothing else: the cache order is
-# tools, then system, then messages, and the system prompt carries the current
-# datetime on its third line, so everything from there on differs every call.
+# This used to be impossible: the system prompt carried the datetime on its
+# third line, so every byte after it differed on each call, leaving the tools
+# as the only candidate. The tools measure 4199 tokens against Haiku 4.5's
+# documented 4096 floor and **caching still did not fire** — probed directly,
+# both counters came back 0, while the same probe padded to 7240 tokens cached
+# 6912 immediately. The cache measures a smaller prefix than `count_tokens`
+# reports, and 103 tokens of headroom was not enough.
 #
-# The tools measure 4199 tokens against Haiku 4.5's documented 4096 floor,
-# which reads like caching should fire. **It does not.** Probed directly —
-# two identical requests, `cache_creation_input_tokens` and
-# `cache_read_input_tokens` both 0 — while the same probe with the tools
-# padded to 7240 tokens cached 6912 of them immediately. So the cache measures
-# a smaller prefix than `count_tokens` reports, and 103 tokens of headroom is
-# not enough. A marker here would be a silent no-op that reads as a working
-# optimization.
+# Splitting the prompt into a static half and a live tail fixed it. Measured:
+# the prefix is 5000 tokens by `count_tokens`, the cache reports **4676**
+# written then read back on every subsequent call. So the real threshold sits
+# between 4199 and 4676.
 #
-# `tests/test_router_prompt.py` asserts this empirically: declare
-# cache_control and it must produce an actual cache read.
+# What it buys is spend, not speed: 1229ms -> 1153ms median, inside the noise,
+# because a Haiku call has a ~660ms floor that prefill is a small share of.
+# `tests/test_router_prompt.py` asserts the behaviour — declare cache_control
+# and it must produce an actual cache read.
 
-# Byte-stable except for the datetime block, which necessarily varies.
-_SYSTEM = """\
-You are the router for a personal assistant. You never talk to the user — you \
-only choose exactly one tool and fill in its arguments.
+# Byte-stable. Nothing derived from the clock, the database or the request may
+# appear here; it all belongs in _SYSTEM_LIVE, below the cache breakpoint.
+_SYSTEM_STATIC = """\
+You are the router for a personal assistant. You choose exactly one tool and \
+fill in its arguments.
 
-Current date and time: {now_iso}
-Timezone: {tz_name}
-Today is: {weekday}
-
-CALENDAR — copy dates from this table. Do not calculate them yourself.
-{calendar}
-{reports}{projects}
 Resolving times is the most important thing you do:
 - Every time you emit MUST be absolute ISO 8601 with an offset. Never a \
 relative phrase, never a bare date for something that has a time.
@@ -485,7 +508,9 @@ research_task rather than escalating separately.
 - Filing something under a project that already exists -> the normal tool for \
 what it is, with project_id set from PROJECTS.
 - What to cook, or a recipe from what is in the house -> escalate.
-- A question about stored information -> query.
+- A question the TODAY block below already answers -> answer, putting the \
+spoken sentence in `reply`. This is the only tool that talks to the user.
+- Any other question about stored information -> query.
 - An existing thing MOVING to a different time -> reschedule. Never add a \
 second copy of something that already exists.
 - An existing thing being called off -> cancel.
@@ -499,7 +524,36 @@ charitably.
 One distinction is worth being careful about, because it is easy to get \
 backwards: a STATEMENT that something changed is not a QUESTION about it. \
 "dentist moved to friday" is the user telling you a fact — reschedule it. \
-Only reach for query when they are actually asking you something.\
+Only reach for query when they are actually asking you something.
+
+Using `answer`:
+- Prefer it whenever TODAY below contains what was asked for. "What's my \
+morning brief", "what have I got going on today", "what's on tomorrow", \
+"anything I need to deal with", "when is my dentist appointment" are all \
+`answer` when the relevant line is in TODAY. Do not route these to query \
+merely because they are questions.
+- But only when TODAY actually holds it. If answering needs a note, an email, \
+a project or an old report, use query — TODAY is the day, not the archive. If \
+TODAY is absent or has no line bearing on the question, use query.
+- One or two sentences, spoken to someone who cannot see a screen: no \
+markdown, no lists, no emoji, no ISO timestamps. Say times the way a person \
+would.
+- Never mention where it came from. No "based on your data", no "it looks \
+like". Say the answer directly, as something you know.
+- Summarise and draw the obvious conclusion rather than reading rows aloud.\
+"""
+
+# Everything derived from the clock, the database or the request. Sits AFTER
+# the cache breakpoint, so none of it invalidates the cached prefix.
+_SYSTEM_LIVE = """\
+
+Current date and time: {now_iso}
+Timezone: {tz_name}
+Today is: {weekday}
+
+CALENDAR — copy dates from this table. Do not calculate them yourself.
+{calendar}
+{today}{reports}{projects}\
 """
 
 
@@ -557,7 +611,31 @@ def projects_table(projects) -> str:
     )
 
 
-def system_prompt(tz_name: str, reports=(), projects=()) -> str:
+def system_blocks(tz_name: str, reports=(), projects=(), today: str = "") -> list[dict]:
+    """The system prompt as two blocks, with the cache breakpoint between them.
+
+    The marker goes on the static block, so the cached prefix is tools plus
+    that block and nothing after it. Everything live — the clock, the
+    calendar table, TODAY, REPORTS, PROJECTS — is in the second block, which
+    is re-read every call and costs a few hundred tokens of prefill.
+    """
+    return [
+        {
+            "type": "text",
+            "text": _SYSTEM_STATIC,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": _live_half(tz_name, reports, projects, today)},
+    ]
+
+
+def system_prompt(tz_name: str, reports=(), projects=(), today: str = "") -> str:
+    """The same prompt as one string. What the model sees is `system_blocks`;
+    this is for tests and for counting tokens."""
+    return _SYSTEM_STATIC + _live_half(tz_name, reports, projects, today)
+
+
+def _live_half(tz_name: str, reports=(), projects=(), today: str = "") -> str:
     local = timeutil.now(tz_name)
     table = reports_table(reports)
     # Omitted entirely rather than rendered empty — an empty table invites the
@@ -575,11 +653,22 @@ def system_prompt(tz_name: str, reports=(), projects=()) -> str:
         if project_table
         else ""
     )
-    return _SYSTEM.format(
+    # Omitted entirely when the day is empty, for the same reason the REPORTS
+    # table is: a heading with nothing under it invites the model to answer
+    # from it anyway.
+    today_block = (
+        "\nTODAY — the day as it stands right now. Answer from this with the "
+        "`answer` tool when it is enough.\n"
+        f"{today}\n"
+        if today.strip()
+        else ""
+    )
+    return _SYSTEM_LIVE.format(
         now_iso=local.isoformat(timespec="seconds"),
         tz_name=tz_name,
         weekday=local.strftime("%A, %B %-d, %Y"),
         calendar=calendar_table(local),
+        today=today_block,
         reports=block,
         projects=project_block,
     )
@@ -619,17 +708,19 @@ def _client() -> anthropic.Anthropic:
     return _CLIENT
 
 
-def route(text: str, tz_name: str, reports=(), projects=()) -> tuple[str, dict]:
+def route(
+    text: str, tz_name: str, reports=(), projects=(), today: str = ""
+) -> tuple[str, dict]:
     """Classify one utterance. Returns (tool_name, tool_input).
 
-    `reports` and `projects` are passed in rather than read here: this module
-    makes model calls and formats prompts, and giving it a database connection
-    would make it impossible to test either without one.
+    `reports`, `projects` and `today` are passed in rather than read here:
+    this module makes model calls and formats prompts, and giving it a
+    database connection would make it impossible to test either without one.
     """
     response = _client().messages.create(
         model=MODEL,
         max_tokens=1024,
-        system=system_prompt(tz_name, reports, projects),
+        system=system_blocks(tz_name, reports, projects, today),
         tools=TOOLS,
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": text}],

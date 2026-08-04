@@ -16,3 +16,10 @@ JARVIS_BUNDLE_ID = com.jaxongardner.jarvis
 // keychain (the OU field). If you belong to more than one team, check which
 // one owns the App ID: developer.apple.com/account → Membership details.
 JARVIS_DEVELOPMENT_TEAM = Z77Q73L56Q
+
+// The build number. Bump it when you ship a change to the device.
+//
+// This was frozen at 1 from the day the project was created, so every
+// reinstall looked like the same build to the OS. That is worth not doing
+// regardless of whether anything depends on it.
+JARVIS_BUILD = 2

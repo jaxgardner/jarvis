@@ -84,6 +84,30 @@ def test_missing_headers_do_not_raise():
     assert row["subject"] is None and row["sender"] is None
 
 
+def test_preheader_padding_is_stripped_from_the_snippet():
+    """Marketing mail pads its preheader with zero-width characters so the
+    inbox preview shows nothing after the hook. Gmail returns them inside
+    `snippet`, and they are invisible but *not* cheap: each is its own
+    codepoint and tokenizes to two or three tokens. Measured on one real
+    morning, 611 of them were 1248 tokens — 66% of the whole context handed
+    to the answering model, for nothing a reader or a model can see."""
+    padded = "What to watch this week" + "͏ ‌ ﻿" * 40
+    row = gmail.to_row(message(snippet=padded))
+
+    assert row["snippet"] == "What to watch this week"
+
+
+def test_a_snippet_of_nothing_but_padding_is_dropped():
+    row = gmail.to_row(message(snippet="‌﻿ ͏"))
+    assert row["snippet"] is None
+
+
+def test_ordinary_punctuation_and_accents_survive():
+    """The strip is by Unicode category, so it must not reach real text."""
+    row = gmail.to_row(message(snippet="Café — “quoted”, 50% off… naïve"))
+    assert row["snippet"] == "Café — “quoted”, 50% off… naïve"
+
+
 def test_metadata_format_is_what_is_requested(monkeypatch):
     """format=metadata is the guarantee that bodies are never stored: Gmail
     does not return them, so there is no path from here to message contents."""

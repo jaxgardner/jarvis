@@ -81,6 +81,18 @@ pushed to Google. Two sources, two very different postures:
 Message bodies are never stored. `format=metadata` means Gmail does not return
 them, so there is no path to storing them by accident.
 
+**Snippets are cleaned on the way in, and that is a latency fix, not tidiness.**
+Marketing mail pads its preheader with zero-width characters so the inbox
+preview shows the hook and nothing after it, and Gmail hands them back inside
+`snippet`. They are invisible and they are not free: each is its own codepoint
+outside the tokenizer's common set and costs two or three tokens. Measured on
+one real morning, 611 of them were **1248 tokens — 66% of the entire context**
+handed to `router.answer`, and stripping them took that call from ~2190ms to
+~1540ms. `ingest.gmail.clean_snippet` filters by Unicode category (`Cf`, plus
+U+034F, which is a combining mark and so would survive a `Cf`-only filter);
+migration 015 cleaned the rows already stored, since `prune` would otherwise
+have kept charging for them until they aged out.
+
 **Synced writes bypass the mutations helper.** This is an exception to the
 invariant below, and a deliberate one: the log exists to make *voice* input
 reversible, a sync is not a user action, and a few hundred synced rows would
@@ -200,6 +212,17 @@ today" answers from that plus live data.
   iOS truncates it. Tapping opens Talk with the mic live — the same latch the
   gratitude prompt uses, for the opposite reason: that one is *answered* by
   talking, this one is *asked for* by talking.
+- **The row and the push are separate facts, and conflating them cost a
+  morning.** The row means the summary exists; a `heartbeats` row named
+  `brief`, holding the day it last pushed for, means you were told. The push
+  used to be reachable only from the branch that generated the row, so
+  anything writing today's row early — a manual run, a `--force`, a retry
+  after a failed push — left the 7am job printing `already ran today` and
+  sending nothing. That is exactly what happened on 2026-08-04: a 2:33am
+  development run wrote the row, and 7am had nothing left to do. `push()` now
+  dedupes and stamps itself, `main()` calls it unconditionally, and nothing
+  is stamped unless the push landed — the same bookkeeping in the same table
+  as `gratitude.nudge`, for the same reasons.
 - **It always writes a sentence, even on a quiet morning.** The first version
   let the model reply `NOTHING` when the mail was all newsletters, and on a
   real mailbox that fired immediately: 29 messages, no summary, no push, a
@@ -582,6 +605,7 @@ the tool choice; there is no separate classifier model.
 | `start_project` | `name`, `description?`, `research_task?` — deep when research came with it |
 | `log_gratitude` | `items[]` |
 | `query` | `question`, `kind`, `window_days?`, `job_id?`, `project_id?` |
+| `answer` | `reply` — spoken verbatim. The one tool that talks to the user |
 | `undo_last` | — |
 | `escalate` | `restated_task`, `job_id?`, `project_id?` — routes to the deep path |
 
@@ -598,6 +622,36 @@ ISO 8601.
 `add_reminder(body=..., fire_at=...)`, format the reply in Python.
 Deterministic, and it saves a round trip.
 
+**The router now talks, for exactly one tool, and this reverses an earlier
+rule.** It used to be told "you never talk to the user — you only choose a
+tool", and `answer` breaks that deliberately. The reason is measured: a
+question about today cost `route` and then `router.answer`, two *sequential*
+Haiku calls, and a Haiku call has a **~660ms floor** that is neither network
+(18ms TCP+TLS to the API) nor prefill nor generation. Two round trips was the
+whole of a 3-second answer. Since the router already has the day in its
+prompt, the second call was buying a rephrasing of context it had also been
+given.
+
+- **`TODAY` is question-independent, and that is what makes it safe.** It is
+  built before the utterance is read — the stored mail summary, the live
+  agenda, and `_needs_doing` — so there is no search over the user's words in
+  it. Anything needing a note, an email, a project or an old report still
+  routes to `query`, which searches and then makes the second call. The
+  prompt says so twice, because the failure mode is answering "what did I say
+  about the fence" out of a block that never contained it.
+- **`handlers.agenda_lines` is shared by `query` and `today_block`** so the
+  router and the answering model are shown the day in identical words. Two
+  formatters would drift, and the drift would surface as an answer that
+  changed depending on which path it took — the thing the unified
+  brief/agenda context was built to prevent in the first place.
+- **The reply is squeezed to one line.** `/say` promises a single plain-text
+  string safe to hand to a TTS engine, and a newline in a tool argument is a
+  pause that is not in the sentence.
+- Measured over 12 utterances spanning day questions, archive questions and
+  writes: **zero misroutes**, and a brief question went from ~2900ms to
+  ~1400ms. `query` keeps its templated shortcuts, which were already one
+  call.
+
 ## Local facts that are easy to get wrong
 
 - **`mcp.json`'s `cwd` key is ignored.** Claude Code spawns the MCP server with
@@ -608,50 +662,61 @@ Deterministic, and it saves a round trip.
   so the agent just has no tools and the job *succeeds*, answering that it has
   no way to search your mail. Covered by
   `test_mcp_server_starts_from_outside_the_repo`.
-- **Prompt caching does not fire here, and two separate things have to be true
-  before it could.** The cache prefix is ordered tools, then system, then
-  messages — and the system prompt carries the current datetime in its third
-  line, so everything from there on differs on every call. **Only the TOOLS
-  block is ever cacheable, however large the prompt grows.** That is the
-  structural half, and it is why the whole-prompt size is the wrong number to
-  reason from.
+- **Prompt caching fires now, and what made it work was reordering the prompt,
+  not growing it.** The cache prefix is ordered tools, then system, then
+  messages, so everything up to the `cache_control` marker must be byte-stable.
+  The system prompt used to carry the datetime on its third line, which left
+  the tools as the only candidate — and the tools alone are **4378** tokens
+  against Haiku 4.5's documented **4096** floor, which reads like it should
+  work. **Probed directly, it did not**: two identical requests both reported
+  zero on both counters, while the same probe padded to 7240 tokens cached
+  6912 immediately.
 
-  The second half is that the tools are still too small, and this is where the
-  published number misleads. Measured: the tools alone are **4199** tokens
-  against Haiku 4.5's documented **4096** floor — 103 over, which reads like
-  caching should fire. **Probed directly, it does not**: two identical
-  requests both report `cache_creation_input_tokens` and
-  `cache_read_input_tokens` of 0. The same probe with the tools padded to 7240
-  tokens caches 6912 of them on the first call and reads them back on the
-  second. So the cache measures a smaller prefix than `count_tokens` reports
-  for the request, and a hundred tokens of headroom is not enough.
+  Splitting the prompt fixed it. `_SYSTEM_STATIC` holds the rules and carries
+  the marker; `_SYSTEM_LIVE` holds the clock, the calendar table, `TODAY`,
+  `REPORTS` and `PROJECTS`. The prefix measures **5253** tokens by
+  `count_tokens` and the cache reports **4929** written and then read back on
+  every subsequent call, against ~1048 uncached in the live tail. So the real
+  threshold sits somewhere between 4199 and 4676, and `count_tokens` is not
+  the number that decides it.
+
+  **What this bought is spend, not speed.** Measured: 1229ms → 1153ms median,
+  inside the noise, because a Haiku call has a ~660ms floor that prefill is a
+  small share of. The economics: the median gap between real utterances is
+  340s, so a 5-minute TTL reads the cache 48% of the time (0.69x of uncached,
+  after the 1.25x writes) and a 1-hour TTL 73% (0.60x, after 2x writes).
 
   **A `cache_control` marker on a prefix below the minimum is a silent
   no-op** — no error, both counters zero, and it reads as a working
   optimization forever. `tests/test_router_prompt.py` therefore asserts the
   *behaviour*: declare `cache_control` and it must produce a real cache read.
-  It skips when nothing is declared, so the two probe requests are only spent
-  by whoever opts in.
-
-  If it ever does become worth turning on, the economics were measured too:
-  the median gap between real utterances is 340s, so a 5-minute TTL would read
-  the cache 48% of the time (0.69x of uncached, after the 1.25x writes) and a
-  1-hour TTL 73% (0.60x, after 2x writes). Both beat not caching; neither is
-  dramatic. Moving the datetime to the *end* of the system prompt would make
-  the system half cacheable and push the prefix well clear of the floor — that
-  is the change to make first, and it has not been done because the upside is
-  only the prefill share of a ~900ms call.
+  A second test asserts the cached block is byte-identical across two
+  different timezones, report lists, project lists and days — one live value
+  leaking into it kills caching silently and permanently.
 - **The Anthropic client sets its own httpx keepalive.** httpx expires idle
   connections after 5s by default and the SDK does not override it, so an
   assistant spoken to every few minutes would re-handshake on every request.
   Measured from the Mini that is only ~15ms, which is why this is one line in
   `_client()` and not a subsystem.
-- **The fast path is the model call, essentially all of it.** Measured
-  directly, `router.route` is 800–1065ms against a recorded end-to-end p50 of
-  ~1.4s and a floor of 686ms. The four SQLite transactions per `/say` and the
-  per-request `devices.touch` write look wasteful and are not worth
-  optimizing — they are inside the noise. Optimize the hops around the model,
-  not the bookkeeping.
+- **The fast path is the model call, essentially all of it, and the unit to
+  optimize is the *number of calls*.** The budget, measured per hop:
+
+  | | |
+  | :-- | :-- |
+  | TCP+TLS to `api.anthropic.com` | 18ms |
+  | `today_block` + the other SQLite reads | ~3ms |
+  | One Haiku call, `max_tokens=1` | **660ms** |
+  | …generating a full sentence on top | +50ms |
+  | …prefill, 30 → 8730 input tokens | ~400ms, and non-monotonic |
+
+  So a call costs ~660ms before it does anything, the network is a rounding
+  error, the database is free, and **tokens barely matter** — 290x the input
+  bought only ~400ms, inside the run-to-run variance. This is why shrinking
+  prompts and shrinking context are not latency work: they are cost work that
+  sometimes shows up as noise. Two sequential calls was the entire difference
+  between a 1.4s answer and a 3s one, which is what the `answer` tool exists
+  to remove. Beware measuring any of this with n=3; the spread on a single
+  call runs 600–2400ms.
 - **The Claude Code subscription cannot serve the fast path.** Measured
   `claude -p --model haiku` at 1.88 / 2.12 / 1.97s for a trivial prompt — that
   is startup alone, against a 2s end-to-end budget. `ANTHROPIC_API_KEY` is a
@@ -665,6 +730,23 @@ Deterministic, and it saves a round trip.
   `ntfy`, so a fresh checkout without a `.env` behaves differently from the
   Mini. `ntfy,apns` fans out to both, which is how the cutover was done.
   If ntfy is in use, its topic name is the only secret — treat it as a password.
+- **A notification's icon is the app's own icon drawn at ~20pt, and the
+  artwork has to survive that.** The payload cannot choose one; there is no
+  icon field in `aps`. "Notifications show the default icon" turned out to
+  mean the icon reads fine at the Home Screen's 60pt and collapses into a
+  dark, featureless square at the 60px a banner draws on a 3x phone — the
+  rings mush together and the corner brackets disappear. Worth not
+  re-investigating: it is **not** a missing rendition and **not** a stale
+  icon cache. The catalog compiles without warnings, `Assets.car` carries the
+  icon, `devicectl device info apps` confirmed the phone was running the
+  right build, and a delete-and-reinstall changed nothing. `icon-1024-dark.png`
+  is byte-identical to the light one, so dark mode buys no extra contrast
+  either. The fix is redrawing for the small size, not build settings.
+- **`JARVIS_BUILD` in `Config.xcconfig` is the build number.** It arrived
+  while chasing the icon above on a cache theory that was then disproved, and
+  it stays on its own merits: `CURRENT_PROJECT_VERSION` had been frozen at `1`
+  since the project was created, so every install looked like the same build
+  to the OS.
 - **`notify.push()` returns a bool and never raises.** `scheduler/run.py` calls
   it in a loop over every due reminder: `False` requeues that one reminder,
   where an exception would abort the tick and take every *other* due reminder

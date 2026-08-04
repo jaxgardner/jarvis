@@ -34,6 +34,30 @@ def stored(conn, on: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _already_pushed(conn, on: str) -> bool:
+    row = conn.execute("SELECT detail FROM heartbeats WHERE name = 'brief'").fetchone()
+    return row is not None and row["detail"] == on
+
+
+def _stamp(conn, on: str) -> None:
+    """One push a morning, tracked in `heartbeats` rather than inferred from
+    the `briefs` row.
+
+    The two facts are genuinely separate and used to be conflated: the row
+    means the summary exists, the stamp means you were told. Reading the
+    first as the second meant anything that wrote the row early — a manual
+    run, a `--force`, a retry after a failed push — left the 7am job with
+    nothing to do and no notification to send. `gratitude.nudge` keeps the
+    same bookkeeping in the same table for the same reason.
+    """
+    conn.execute(
+        """INSERT INTO heartbeats (name, last_run_at, detail) VALUES ('brief',?,?)
+             ON CONFLICT(name) DO UPDATE SET last_run_at = excluded.last_run_at,
+                                             detail = excluded.detail""",
+        (timeutil.to_utc_iso(timeutil.now("UTC")), on),
+    )
+
+
 def store(conn, on: str, summary: str | None, count: int) -> None:
     """Write the day's row, replacing any existing one.
 
@@ -93,6 +117,12 @@ def push(tz_name: str | None = None) -> bool:
     Silent on a day with nothing in it. A notification that opens to "nothing
     on the calendar and nothing in the mail" is how a useful prompt becomes a
     muted one.
+
+    Deduped by the day and independent of whether this run generated the row,
+    so a late catch-up after a sleeping machine still announces the brief and
+    a second run cannot announce it twice. Nothing is stamped unless the push
+    landed: `notify.push` returning False means it went nowhere, and on APNs
+    alone no registered device is a real state.
     """
     from app import handlers
 
@@ -101,6 +131,8 @@ def push(tz_name: str | None = None) -> bool:
 
     conn = connect()
     try:
+        if _already_pushed(conn, on):
+            return False
         row = stored(conn, on)
         agenda = handlers.agenda_rows(conn, tz_name, 1)
     finally:
@@ -111,7 +143,7 @@ def push(tz_name: str | None = None) -> bool:
     if not has_mail and not has_day:
         return False
 
-    return notify.push(
+    ok = notify.push(
         "Your morning brief is ready.",
         title="Morning brief",
         tags="sunrise",
@@ -120,6 +152,12 @@ def push(tz_name: str | None = None) -> bool:
         data={"kind": "brief"},
         collapse_id=f"brief-{on}",
     )
+    if not ok:
+        return False
+
+    with transaction() as conn:
+        _stamp(conn, on)
+    return True
 
 
 def main() -> int:
@@ -149,8 +187,10 @@ def main() -> int:
         )
     )
 
-    if result["generated"]:
-        print(f"pushed={push(tz_name)}")
+    # Unconditional, not hung off `result["generated"]`. A row that already
+    # exists means the summary is written, not that it was announced — and
+    # the push does its own once-a-day bookkeeping.
+    print(f"pushed={push(tz_name)}")
     return 0
 
 
