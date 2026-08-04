@@ -103,3 +103,35 @@ def recent(conn, tz_name: str, days: int) -> list[dict]:
             grouped.append({"on": on, "entries": []})
         grouped[-1]["entries"].append(item)
     return grouped
+
+
+# A year and a day. Bounded so a long history cannot make the page slow, and
+# a streak that has run for a year has made its point.
+_STREAK_LIMIT = 366
+
+
+def streak(conn, tz_name: str) -> int:
+    """Consecutive complete days, counting back from today.
+
+    An incomplete today is skipped rather than counted as a break: the day is
+    not over. The streak ends at the first *finished* day that fell short.
+    """
+    counts = {
+        row["entry_on"]: row["n"]
+        for row in conn.execute(
+            "SELECT entry_on, count(*) AS n FROM gratitude_entries GROUP BY entry_on"
+        ).fetchall()
+    }
+
+    today = day_for(timeutil.now(tz_name))
+    day = date.fromisoformat(today)
+    if counts.get(today, 0) < TARGET:
+        day -= timedelta(days=1)
+
+    run = 0
+    for _ in range(_STREAK_LIMIT):
+        if counts.get(day.isoformat(), 0) < TARGET:
+            break
+        run += 1
+        day -= timedelta(days=1)
+    return run

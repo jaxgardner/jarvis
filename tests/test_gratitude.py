@@ -220,3 +220,94 @@ def test_recent_honours_its_window(db, monkeypatch):
         conn.close()
 
     assert [day["on"] for day in got] == ["2026-08-03"]
+
+
+def test_streak_counts_consecutive_complete_days(db, monkeypatch):
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+    for on in ("2026-08-02", "2026-08-03", "2026-08-04"):
+        seed(db, on, ["a", "b", "c"])
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 3
+    finally:
+        conn.close()
+
+
+def test_an_incomplete_today_does_not_break_the_streak(db, monkeypatch):
+    """Today at one is a day in progress, not a failure. A number that turns
+    into a reproach at 6pm is a number that gets muted."""
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+    seed(db, "2026-08-02", ["a", "b", "c"])
+    seed(db, "2026-08-03", ["a", "b", "c"])
+    seed(db, "2026-08-04", ["just the one"])
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 2
+    finally:
+        conn.close()
+
+
+def test_an_empty_today_does_not_break_the_streak_either(db, monkeypatch):
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+    seed(db, "2026-08-03", ["a", "b", "c"])
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 1
+    finally:
+        conn.close()
+
+
+def test_a_missed_day_ends_the_streak(db, monkeypatch):
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+    seed(db, "2026-08-01", ["a", "b", "c"])
+    seed(db, "2026-08-03", ["a", "b", "c"])
+    seed(db, "2026-08-04", ["a", "b", "c"])
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 2
+    finally:
+        conn.close()
+
+
+def test_a_day_short_of_three_does_not_count(db, monkeypatch):
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+    seed(db, "2026-08-03", ["a", "b"])
+    seed(db, "2026-08-04", ["a", "b", "c"])
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 1
+    finally:
+        conn.close()
+
+
+def test_no_history_is_a_zero_streak(db, monkeypatch):
+    from app.db import connect
+    from gratitude import entries
+
+    monkeypatch.setattr(entries, "day_for", lambda local, day_start=None: "2026-08-04")
+
+    conn = connect()
+    try:
+        assert entries.streak(conn, "America/Denver") == 0
+    finally:
+        conn.close()
