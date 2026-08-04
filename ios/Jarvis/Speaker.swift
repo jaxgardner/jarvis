@@ -65,6 +65,20 @@ final class Speaker: NSObject, ObservableObject {
     /// on the device rather than in `/health`.
     private(set) var didFallBack = false
 
+    /// Called the instant the first audio of a reply starts — the end of the
+    /// turn, as the user experiences it.
+    ///
+    /// Here rather than when `speak` returns, because `speak` runs until the
+    /// last chunk has arrived: for a three-sentence reply that is most of a
+    /// second after the first syllable, and measuring it would report a turn
+    /// nobody waited through. The fallback fires it too — a turn that ends in
+    /// Apple's voice still ended.
+    var onFirstAudio: (() -> Void)?
+
+    /// Once per utterance. A reply is many buffers and only the first one is
+    /// the moment being measured.
+    private var announcedFirstAudio = false
+
     init(source: SpeechSource? = nil) {
         self.source = source
         super.init()
@@ -77,6 +91,7 @@ final class Speaker: NSObject, ObservableObject {
         guard !text.isEmpty else { return }
         stop()
         activateSession()
+        announcedFirstAudio = false
         let mine = generation
 
         guard let source else {
@@ -92,6 +107,7 @@ final class Speaker: NSObject, ObservableObject {
                     throw SpeechError.notAudio
                 }
                 try schedule(buffer)
+                announceFirstAudio()
                 started = true
             }
             guard mine == generation else { return }
@@ -234,6 +250,18 @@ final class Speaker: NSObject, ObservableObject {
         utterance.voice = Self.preferredVoice()
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         synthesizer.speak(utterance)
+        // `speak(_:)` on AVSpeechSynthesizer is asynchronous, so this is a
+        // few milliseconds early rather than exact. The alternative is the
+        // delegate's didStart, and a turn that took the fallback is already
+        // being measured with a different voice at the end of it — precision
+        // there would be false comfort.
+        announceFirstAudio()
+    }
+
+    private func announceFirstAudio() {
+        guard !announcedFirstAudio else { return }
+        announcedFirstAudio = true
+        onFirstAudio?()
     }
 
     /// Prefer a premium/enhanced voice when the user has downloaded one —

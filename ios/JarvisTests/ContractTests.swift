@@ -277,6 +277,23 @@ struct ContractTests {
         let detail = try decoder.decode(ProjectDetail.self, from: Data(json.utf8))
         #expect(detail.reports[0].summary == nil)
     }
+
+    // MARK: - Turns
+
+    @Test func turnReportEncodesAsTheServerExpects() throws {
+        /// There is no `Encodable` request type anywhere in this app — every
+        /// body is a `[String: Any]` handed to `JSONSerialization`, so the
+        /// key names are written out rather than derived, and nothing but a
+        /// test stops one drifting from the column it updates.
+        let data = try JSONSerialization.data(
+            withJSONObject: JarvisAPI.turnBody(utteranceId: 412, turnMs: 1840)
+        )
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect(json["utterance_id"] as? Int == 412)
+        #expect(json["turn_ms"] as? Int == 1840)
+    }
 }
 
 /// Anchors `Bundle(for:)` to the test bundle rather than the app's.

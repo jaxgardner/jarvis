@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 
 /// The screen that has to replace the Shortcut. Tap, talk, done.
@@ -31,6 +32,25 @@ struct TalkView: View {
     @State private var isFinishing = false
     @State private var error: String?
     @State private var showingSettings = false
+
+    /// When the endpointer decided you had stopped talking. Everything after
+    /// this instant is latency the user is sitting through, and only about
+    /// half of it is inside /say — which is the whole reason the server's
+    /// `latency_ms` was not enough to work from.
+    @State private var turnStart: ContinuousClock.Instant?
+    /// When the first buffer of the reply started playing. Written by
+    /// `Speaker.onFirstAudio` while `speak` is still running.
+    @State private var firstAudioAt: ContinuousClock.Instant?
+
+    /// The turn as one timeline in Instruments.
+    ///
+    /// `turn_ms` says a turn was slow; these say which hop it was slow in,
+    /// which is the question the single number cannot answer. Signposts
+    /// rather than logging because the hops nest and overlap, and because
+    /// they cost nothing when nothing is recording.
+    private static let signposter = OSSignposter(
+        subsystem: "com.jarvis", category: "turn"
+    )
 
     private enum Phase { case idle, listening, sending, reply, error }
 
@@ -90,6 +110,9 @@ struct TalkView: View {
         // second, and the latch is read-and-clear so neither double-fires.
         .task {
             speaker.source = api
+            // Stops the turn clock. Set here rather than per-utterance so
+            // there is one assignment and no closure capturing a stale id.
+            speaker.onFirstAudio = { firstAudioAt = .now }
             await startIfRequested()
         }
         .onChange(of: router.shouldStartListening) { _, _ in
@@ -103,6 +126,7 @@ struct TalkView: View {
         // You stopped talking. Same path as tapping the button.
         .onChange(of: transcriber.didEndpoint) { _, reached in
             guard reached else { return }
+            turnStart = .now
             Task { await finish() }
         }
     }
@@ -246,7 +270,10 @@ struct TalkView: View {
         isFinishing = true
         defer { isFinishing = false }
 
+        let stopping = Self.signposter.beginInterval("endpoint-to-stop")
         let text = await transcriber.stop()
+        Self.signposter.endInterval("endpoint-to-stop", stopping)
+
         await send(text)
     }
 
@@ -257,16 +284,46 @@ struct TalkView: View {
         isSending = true
         defer { isSending = false }
 
+        firstAudioAt = nil
         do {
+            let saying = Self.signposter.beginInterval("say")
             let response = try await api.say(trimmed)
+            Self.signposter.endInterval("say", saying)
+
             reply = response.reply
             route = response.route
             latencyMs = response.latencyMs
             jobID = response.jobId
+
+            // Covers the request for audio and the wait for the first buffer.
+            // `turn_ms` is the one number the goal is stated in; these are for
+            // the morning it is wrong and the reason is not obvious.
+            let speaking = Self.signposter.beginInterval("say-returned-to-first-audio")
             await speaker.speak(response.reply)
+            Self.signposter.endInterval("say-returned-to-first-audio", speaking)
+
+            await reportTurn(for: response.utteranceId)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// After playback has started, never before: this is a measurement, and
+    /// one that delayed the thing it measures would be worse than none.
+    ///
+    /// Nothing is reported when the turn began with the mic button rather
+    /// than the endpointer, or when no audio ever played. A turn nobody
+    /// waited through in the usual way is not the number the goal is stated
+    /// in, and a zero folded in would flatter it.
+    private func reportTurn(for utteranceId: Int) async {
+        guard let started = turnStart, let heard = firstAudioAt else { return }
+        turnStart = nil
+
+        let elapsed = heard - started
+        let milliseconds =
+            elapsed.components.seconds * 1000
+            + elapsed.components.attoseconds / 1_000_000_000_000_000
+        await api.reportTurn(utteranceId: utteranceId, turnMs: Int(milliseconds))
     }
 }
 

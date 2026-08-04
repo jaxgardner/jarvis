@@ -660,6 +660,44 @@ final class JarvisAPI: ObservableObject {
         try await send("/metrics?days=\(days)")
     }
 
+    // MARK: - The turn
+
+    /// The body `/turns` expects.
+    ///
+    /// Split out and non-private so `ContractTests` can pin the key names
+    /// without a server. Nothing else here is written this way because
+    /// nothing else needs it — but this is the only request whose keys the
+    /// server reads into columns, and a typo would fail silently as an
+    /// utterance that simply never reported a turn.
+    /// `nonisolated` because it reads nothing — the class is `@MainActor` and
+    /// this is pure argument shuffling, which the test calls off the actor.
+    nonisolated static func turnBody(utteranceId: Int, turnMs: Int) -> [String: Any] {
+        ["utterance_id": utteranceId, "turn_ms": turnMs]
+    }
+
+    /// What the turn cost, measured where it is actually felt.
+    ///
+    /// The server's `latency_ms` times /say and cannot see the endpointer
+    /// before it or the synthesis after it — together about 1550ms of a
+    /// 3000ms turn.
+    ///
+    /// Fire-and-forget: sent once playback has started, so it cannot sit on
+    /// the critical path it is measuring, and every failure is swallowed. A
+    /// dropped measurement is not worth surfacing to someone who has already
+    /// been answered — and `isReachable` is deliberately left alone, since a
+    /// metrics write is not evidence about the connection the user cares
+    /// about.
+    func reportTurn(utteranceId: Int, turnMs: Int) async {
+        guard
+            let request = try? request(
+                "/turns",
+                method: "POST",
+                body: Self.turnBody(utteranceId: utteranceId, turnMs: turnMs)
+            )
+        else { return }
+        _ = try? await session.data(for: request)
+    }
+
     // MARK: - Review queue and context
 
     func proposals(limit: Int = 50) async throws -> ProposalsResponse {
@@ -878,12 +916,18 @@ final class JarvisAPI: ObservableObject {
 
     // MARK: - Transport
 
-    private func send<T: Decodable>(
+    /// One authenticated request, built and not yet sent.
+    ///
+    /// Split out of `send` for `reportTurn`, which answers 204 — there is no
+    /// body to decode, and `send` would turn an empty response into
+    /// "unreadable response". Sharing the builder is what keeps the host,
+    /// the port default and the bearer token identical on both paths.
+    private func request(
         _ path: String,
         method: String = "GET",
         body: [String: Any]? = nil,
         token overrideToken: String? = nil
-    ) async throws -> T {
+    ) throws -> URLRequest {
         let credential = overrideToken ?? deviceToken
         guard !host.isEmpty, let credential, !credential.isEmpty else {
             throw APIError.notConfigured
@@ -902,6 +946,18 @@ final class JarvisAPI: ObservableObject {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
+        return request
+    }
+
+    private func send<T: Decodable>(
+        _ path: String,
+        method: String = "GET",
+        body: [String: Any]? = nil,
+        token overrideToken: String? = nil
+    ) async throws -> T {
+        let request = try self.request(
+            path, method: method, body: body, token: overrideToken
+        )
 
         let data: Data
         let response: URLResponse
