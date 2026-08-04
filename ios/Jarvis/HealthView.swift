@@ -55,6 +55,12 @@ struct HealthView: View {
                         )
 
                         if let metrics {
+                            // Above the endpoint, because it is the number the
+                            // goal is stated in and the one below it is a
+                            // component of this one.
+                            if let turn = metrics.turn, turn.count > 0 {
+                                turnCard(turn)
+                            }
                             latencyCard(metrics)
                             spendCard(metrics.spend)
                         }
@@ -141,6 +147,28 @@ struct HealthView: View {
                 }
                 .padding(.top, 10)
             }
+        }
+        .jarvisCard()
+    }
+
+    /// The turn, above the endpoint that is only part of it.
+    ///
+    /// Hidden entirely when nothing has reported one — a Shortcut has no
+    /// microphone and an un-migrated Mini omits the block, and a card reading
+    /// "0 ms" in either case would be a measurement that never happened.
+    private func turnCard(_ turn: MetricsResponse.Latency) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionLabel(text: "The turn")
+
+            Text("End of speech to first sound. The number the goal is stated in.")
+                .font(Theme.sans(12.5))
+                .foregroundStyle(Theme.text3)
+                .padding(.top, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                latencyRow("Endpoint to first syllable", turn, budgeted: false)
+            }
+            .padding(.top, 10)
         }
         .jarvisCard()
     }

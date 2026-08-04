@@ -122,8 +122,8 @@ struct ContractTests {
         /// p95, no max. Those have to be optional or the Health screen breaks
         /// on any window where the deep path was idle, which is most of them.
         let response = try Self.decode(MetricsResponse.self, from: "metrics")
-        #expect(response.fast.count == 2)
-        #expect(response.fast.p95 == 612)
+        #expect(response.fast.count == 3)
+        #expect(response.fast.p95 == 1410)
         #expect(response.deep.count == 0)
         #expect(response.deep.p95 == nil)
     }
@@ -131,8 +131,39 @@ struct ContractTests {
     @Test func spendDecodes() throws {
         let response = try Self.decode(MetricsResponse.self, from: "metrics")
         #expect(response.spend.model == "claude-haiku-4-5")
-        #expect(response.spend.inputTokens == 2557)
+        #expect(response.spend.inputTokens == 7709)
         #expect(response.spend.usd > 0)
+    }
+
+    @Test func metricsDecodesTheTurnBlock() throws {
+        /// The turn sits beside the two route blocks and is read the same
+        /// way. It is larger than `fast` in every real window, which is the
+        /// entire reason it was added — /say cannot see the endpointer in
+        /// front of it or the synthesis behind it.
+        let response = try Self.decode(MetricsResponse.self, from: "metrics")
+        let turn = try #require(response.turn)
+        #expect(turn.count == 3)
+        #expect(turn.p50 == 1840)
+        #expect(turn.p95 == 2260)
+        #expect(turn.p50! > response.fast.p50!)
+    }
+
+    @Test func aServerWithoutTheTurnColumnStillDecodes() throws {
+        /// `turn` is optional because the app updates on its own schedule and
+        /// a Mini that has not been migrated yet simply omits it. A required
+        /// field would take the whole Health screen down over a block that is
+        /// only ever informational.
+        let json = """
+        {"fast": {"count": 0}, "deep": {"count": 0},
+         "spend": {"model": "claude-haiku-4-5", "utterances": 0,
+                   "model_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                   "usd": 0.0, "usd_per_utterance": 0.0,
+                   "usd_per_month_at_this_rate": 0.0}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(MetricsResponse.self, from: Data(json.utf8))
+        #expect(response.turn == nil)
     }
 
     // MARK: - /say

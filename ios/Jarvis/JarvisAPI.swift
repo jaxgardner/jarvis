@@ -394,6 +394,13 @@ struct MetricsResponse: Decodable {
 
     let fast: Latency
     let deep: Latency
+    /// End of speech to first sound, measured on the phone and posted back.
+    ///
+    /// Optional because the app and the Mini update on their own schedules: a
+    /// server without migration 016 omits the block entirely, and a required
+    /// field would take the whole Health screen down over something that is
+    /// only ever informational.
+    let turn: Latency?
     let spend: Spend
 }
 
