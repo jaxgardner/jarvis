@@ -8,6 +8,7 @@ model problem. Deterministic, and it saves a round trip against the 2s budget.
 import json
 import sqlite3
 from datetime import date, datetime, timedelta
+from itertools import zip_longest
 
 from app import mutations, router, timeutil
 
@@ -926,22 +927,29 @@ def context_block(conn, text_query: str, limit: int = 5) -> str:
     # router sees and the block `query` builds from saying the same thing —
     # two formatters would drift, and the drift would surface as an answer
     # that changed depending on which path it took.
-    lines: list[str] = []
-    for note in _search_notes(conn, text_query, limit):
-        body = " ".join(str(note["body"]).split())
-        lines.append(f"NOTE: {body}")
+    notes = [
+        f"NOTE: {' '.join(str(note['body']).split())}"
+        for note in _search_notes(conn, text_query, limit)
+    ]
+    mails = [
+        f"EMAIL: from {' '.join(str(mail['sender'] or '').split())} — "
+        f"{' '.join(str(mail['subject'] or '').split())}"
+        for mail in search_email(conn, text_query, limit)
+    ]
+    texts = [
+        f"TEXT: {'to' if text['direction'] == 'out' else 'from'} {text['handle']} — "
+        f"{' '.join(str(text['body']).split())}"
+        for text in search_messages(conn, text_query, limit)
+    ]
 
-    for mail in search_email(conn, text_query, limit):
-        subject = " ".join(str(mail["subject"] or "").split())
-        sender = " ".join(str(mail["sender"] or "").split())
-        lines.append(f"EMAIL: from {sender} — {subject}")
-
-    for text in search_messages(conn, text_query, limit):
-        body = " ".join(str(text["body"]).split())
-        who = text["handle"]
-        lines.append(
-            f"TEXT: {'to' if text['direction'] == 'out' else 'from'} {who} — {body}"
-        )
+    # Interleaved, not concatenated, because the block is truncated to `limit`.
+    # Appending each source after the last means a busy archive spends every
+    # slot on notes and the texts are never reached — measured on the real
+    # database, where ten matching notes hid a text that answered the question.
+    # Round-robin gives each source a slot before any source gets a second.
+    lines = [
+        line for tier in zip_longest(notes, mails, texts) for line in tier if line
+    ]
 
     return "\n".join(lines[:limit])
 

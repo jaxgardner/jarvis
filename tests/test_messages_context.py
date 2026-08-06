@@ -38,6 +38,25 @@ def test_context_block_includes_texts(conn):
     assert "TEXT:" in block
 
 
+def test_a_text_survives_a_context_block_full_of_notes(conn):
+    """Texts are appended last but must not be starved by abundance.
+
+    context_block truncates to `limit`. Concatenating notes, then mail, then
+    texts means a busy archive fills every slot before the texts are reached,
+    and the pre-retrieval half of this feature silently never fires — which is
+    exactly what it did on the real database the day it shipped.
+    """
+    for i in range(10):
+        conn.execute(
+            "INSERT INTO notes (body) VALUES (?)", (f"a note about dinner plans {i}",)
+        )
+    _message(conn, "are we still on for dinner tonight")
+    conn.commit()
+
+    block = handlers.context_block(conn, "what was said about dinner")
+    assert "TEXT:" in block
+
+
 def test_missed_calls_appear_in_today(conn):
     conn.execute(
         "INSERT INTO calls (external_id, handle, direction, answered, occurred_at)"
