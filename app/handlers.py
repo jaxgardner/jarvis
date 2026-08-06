@@ -710,6 +710,21 @@ def _needs_doing(conn, tz_name: str) -> list[str]:
             when = "today" if days == 0 else ("overdue" if days < 0 else f"in {days} days")
             lines.append(f"EXPIRING: {item['name']} — {when}")
 
+    # A missed call is a fact about the day in the way an appointment is.
+    # Answered calls are not — you already dealt with those. The window is the
+    # same local midnight `agenda_rows` uses, from the same helper: a second
+    # start-of-day computed here would disagree with that one across a DST
+    # boundary, which is exactly the kind of bug nobody looks for.
+    start_of_day_iso, _ = timeutil.window_utc(tz_name, 1)
+    missed = conn.execute(
+        """SELECT handle, occurred_at FROM calls
+             WHERE direction = 'in' AND answered = 0 AND occurred_at >= ?
+             ORDER BY occurred_at DESC LIMIT 5""",
+        (start_of_day_iso,),
+    ).fetchall()
+    for call in missed:
+        lines.append(f"MISSED CALL: from {call['handle']}")
+
     # Reports that landed since yesterday. Deliberately not "reports awaiting
     # an answer": nothing detects that a report asked you something, and
     # inventing a classifier for one line of a brief would be the marker this
@@ -812,10 +827,49 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
             f"{m['subject'] or '(no subject)'}: {m['snippet'] or ''}"
         )
 
+    # Texts, searched like mail and for the same reason: "did the landlord
+    # write back" can be answered by either, and an answer that depends on
+    # which of the two the router happened to pick is an answer you cannot
+    # trust. Same unified-context rule the brief and the agenda already share.
+    for t in search_messages(conn, args["question"], limit=6):
+        when = timeutil.speak_datetime(t["sent_at"], tz_name)
+        who = ("to " if t["direction"] == "out" else "from ") + t["handle"]
+        lines.append(f"TEXT: {who} {when} — {t['body']}")
+
+    # Calls cannot be searched: a handle is a phone number and none of the
+    # question's words appear in the row. So kind='call' lists the recent ones
+    # instead, which is what "did I miss a call" is actually asking.
+    if kind == "call":
+        lines.extend(_call_lines(conn, tz_name, days))
+
     if not lines:
         lines.append("(nothing stored in this window)")
 
     return router.answer(args["question"], "\n".join(lines), tz_name)
+
+
+def _call_lines(conn, tz_name: str, days: int, limit: int = 10) -> list[str]:
+    """Recent calls, most recent first, missed ones marked.
+
+    Looks *backwards* — unlike everything else `query` gathers, which looks
+    forward from local midnight. A call is a thing that already happened, and
+    a window ending at today's midnight would contain none of them.
+    """
+    cutoff = timeutil.to_utc_iso(timeutil.now("UTC") - timedelta(days=days))
+    rows = conn.execute(
+        """SELECT handle, direction, answered, duration_s, occurred_at FROM calls
+             WHERE occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?""",
+        (cutoff, limit),
+    ).fetchall()
+    lines = []
+    for row in rows:
+        when = timeutil.speak_datetime(row["occurred_at"], tz_name)
+        if row["direction"] == "in" and not row["answered"]:
+            lines.append(f"MISSED CALL: from {row['handle']} {when}")
+        else:
+            direction = "to" if row["direction"] == "out" else "from"
+            lines.append(f"CALL: {direction} {row['handle']} {when}")
+    return lines
 
 
 def _search_notes(conn, question: str, limit: int = 10) -> list[dict]:
@@ -848,7 +902,7 @@ def _search_notes(conn, question: str, limit: int = 10) -> list[dict]:
     ]
 
 
-def context_block(conn, text: str, limit: int = 5) -> str:
+def context_block(conn, text_query: str, limit: int = 5) -> str:
     """What the archive has to say about this utterance, fetched before the
     router sees it.
 
@@ -873,16 +927,53 @@ def context_block(conn, text: str, limit: int = 5) -> str:
     # two formatters would drift, and the drift would surface as an answer
     # that changed depending on which path it took.
     lines: list[str] = []
-    for note in _search_notes(conn, text, limit):
+    for note in _search_notes(conn, text_query, limit):
         body = " ".join(str(note["body"]).split())
         lines.append(f"NOTE: {body}")
 
-    for mail in search_email(conn, text, limit):
+    for mail in search_email(conn, text_query, limit):
         subject = " ".join(str(mail["subject"] or "").split())
         sender = " ".join(str(mail["sender"] or "").split())
         lines.append(f"EMAIL: from {sender} — {subject}")
 
+    for text in search_messages(conn, text_query, limit):
+        body = " ".join(str(text["body"]).split())
+        who = text["handle"]
+        lines.append(
+            f"TEXT: {'to' if text['direction'] == 'out' else 'from'} {who} — {body}"
+        )
+
     return "\n".join(lines[:limit])
+
+
+def search_messages(conn, question: str, limit: int = 6) -> list[dict]:
+    """Search imported texts. Same two-stage shape as _search_notes.
+
+    Messages are hard-deleted when they age out, so — unlike notes — the FTS
+    index needs no join back to filter tombstones. The join is only here for
+    the columns FTS does not store.
+
+    Returns [] when the table doesn't exist yet, so every caller keeps working
+    on a database that hasn't had migration 017 applied.
+    """
+    terms = [
+        w for w in "".join(c if c.isalnum() else " " for c in question).split()
+        if len(w) > 2
+    ]
+    if not terms:
+        return []
+    try:
+        rows = conn.execute(
+            """SELECT m.handle, m.body, m.sent_at, m.direction
+                 FROM messages_fts f
+                 JOIN messages m ON m.id = f.rowid
+                WHERE messages_fts MATCH ?
+                ORDER BY rank LIMIT ?""",
+            (" OR ".join(terms), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(r) for r in rows]
 
 
 _EMAIL_COLUMNS = "sender, subject, snippet, received_at, is_unread"

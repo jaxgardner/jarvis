@@ -287,7 +287,17 @@ TOOLS: list[dict] = [
                 "project_id": _PROJECT_ID,
                 "kind": {
                     "type": "string",
-                    "enum": ["agenda", "when", "recall", "pantry", "brief", "project", "other"],
+                    "enum": [
+                        "agenda",
+                        "when",
+                        "recall",
+                        "pantry",
+                        "brief",
+                        "project",
+                        "message",
+                        "call",
+                        "other",
+                    ],
                     "description": (
                         "The shape of the question. 'agenda' = what is "
                         "happening in a date range ('what's on tomorrow', "
@@ -308,7 +318,10 @@ TOOLS: list[dict] = [
                         "they are working on at all ('where am I on the "
                         "lettuce project', 'what am I working on', 'catch me "
                         "up on the remodel'); set project_id when they named "
-                        "one. 'other' = "
+                        "one. A question about a text message or a phone call "
+                        "is kind='message' or kind='call' ('did Sarah text "
+                        "back', 'what did she say', 'did I miss a call', "
+                        "'who called'). 'other' = "
                         "anything needing reasoning, counting, or comparison "
                         "across items."
                     ),
