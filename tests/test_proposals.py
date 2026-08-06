@@ -7,12 +7,15 @@ which is what makes it undoable on the same terms as anything spoken.
 
 import json
 import sqlite3
+from datetime import timedelta
 
 import pytest
 
+from app import timeutil
 from tests.helpers import apply_migrations
 
 SHARED = "shared-token-for-tests"
+TZ = "America/Denver"
 
 
 @pytest.fixture
@@ -100,14 +103,24 @@ def test_listing_unpacks_the_payload_for_the_client(db, client):
     it: two implementations of "tomorrow at 3 PM" drift, and the one you'd
     trust is the one you can't see.
     """
-    propose(db)
-    proposal = client.get("/proposals?tz=America/Denver").json()["proposals"][0]
+    # Both halves are computed rather than written down, and each fixed a way
+    # this test rotted. `speak_datetime` only names the date when it is a week
+    # or more out, so a hardcoded date silently switches to the bare weekday as
+    # today catches up with it — this asserted "Monday, August 10" and started
+    # reading "Monday". And 7:30 is built in local time because 13:30Z is 7:30
+    # only while MDT is in effect; under MST the same instant is 6:30.
+    local = (timeutil.now(TZ) + timedelta(days=14)).replace(
+        hour=7, minute=30, second=0, microsecond=0
+    )
+    starts_at = timeutil.to_utc_iso(local)
+
+    propose(db, payload={"starts_at": starts_at})
+    proposal = client.get(f"/proposals?tz={TZ}").json()["proposals"][0]
     assert proposal["title"] == "Flight UA 412"
     assert proposal["location"] == "DEN"
-    # 13:30 UTC is 7:30 AM in Denver, and the date is far enough out to be named.
-    assert proposal["when"] == "Monday, August 10 at 7:30 AM"
+    assert proposal["when"] == f"{local.strftime('%A, %B %-d')} at 7:30 AM"
     # The raw payload survives — accepting is what writes the event.
-    assert json.loads(proposal["payload_json"])["starts_at"] == "2026-08-10T13:30:00Z"
+    assert json.loads(proposal["payload_json"])["starts_at"] == starts_at
 
 
 def test_a_proposal_with_no_time_still_lists(db, client):

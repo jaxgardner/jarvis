@@ -372,13 +372,26 @@ def test_pantry_inventory_leads_with_what_is_dying(db):
 def test_pantry_inventory_reports_days_left_not_iso_dates(db):
     """The agent is being asked what to cook tonight. 'in 2 days' is the
     useful framing; a date makes it do arithmetic it gets wrong."""
+    from datetime import timedelta
+
+    from app import config, timeutil
     from app.db import transaction
     from mcp_server import server
+
+    # The expiry is built from the LOCAL date, because that is what
+    # `inventory._today()` counts from — "expires tomorrow" is a wall-clock
+    # question and nobody thinks about their spinach in UTC. SQLite's
+    # `date('now')` is UTC, so between local evening and midnight UTC it names
+    # tomorrow, and this asserted "2 days" against an item three days out.
+    expires_on = (
+        timeutil.now(config.DEFAULT_TZ).date() + timedelta(days=2)
+    ).isoformat()
 
     with transaction() as conn:
         conn.execute(
             """INSERT INTO pantry_items (name, expires_on, status, location)
-                 VALUES ('spinach', date('now','+2 days'), 'active', 'fridge')"""
+                 VALUES ('spinach', ?, 'active', 'fridge')""",
+            (expires_on,),
         )
 
     output = server.pantry_inventory()

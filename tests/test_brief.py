@@ -286,11 +286,22 @@ def test_a_day_with_only_calendar_is_still_pushed(db, pushes, monkeypatch):
     from app.db import transaction
     from brief import mail, run
 
+    from app import timeutil
+
     monkeypatch.setattr(mail, "summarize", lambda messages: None)
+
+    # Noon *local*, not "now plus two hours". `push` asks agenda_rows for the
+    # window starting at local midnight, so an offset from the current instant
+    # falls off the end of today whenever the local evening is already the next
+    # day in UTC — which made this fail after about 10pm and pass every morning.
+    # A past-but-today event still counts: the window is the whole local day.
+    noon = timeutil.now("America/Denver").replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
     with transaction() as conn:
         conn.execute(
-            """INSERT INTO events (title, starts_at)
-                 VALUES ('standup', strftime('%Y-%m-%dT%H:%M:%SZ','now','+2 hours'))"""
+            "INSERT INTO events (title, starts_at) VALUES ('standup', ?)",
+            (timeutil.to_utc_iso(noon),),
         )
     run.generate("America/Denver")
 
