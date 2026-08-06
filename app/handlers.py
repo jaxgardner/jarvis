@@ -832,7 +832,26 @@ def query(conn, utterance_id: int, args: dict, tz_name: str) -> str:
     # write back" can be answered by either, and an answer that depends on
     # which of the two the router happened to pick is an answer you cannot
     # trust. Same unified-context rule the brief and the agenda already share.
-    for t in search_messages(conn, args["question"], limit=6):
+    text_hits = search_messages(conn, args["question"], limit=6)
+
+    # A question about *time* — "what was my last text", "has anyone texted
+    # me" — is not a search, and FTS ranks by relevance. Its words match
+    # content rather than recency ("How was last night?", "unsubscribed from
+    # text alerts"), so search alone answers it with whatever scattered dates
+    # rank highest. Measured on the real database: six hits spanning 2021 to
+    # 2026 for "what was my last text message". So recent texts are listed
+    # beside the matches, the same reason `_call_lines` lists rather than
+    # searches, and the whole block is rendered newest-first.
+    if kind == "message":
+        already = {(t["handle"], t["sent_at"]) for t in text_hits}
+        text_hits += [
+            t
+            for t in recent_messages(conn, limit=8)
+            if (t["handle"], t["sent_at"]) not in already
+        ]
+        text_hits.sort(key=lambda t: t["sent_at"], reverse=True)
+
+    for t in text_hits:
         when = timeutil.speak_datetime(t["sent_at"], tz_name)
         who = ("to " if t["direction"] == "out" else "from ") + t["handle"]
         lines.append(f"TEXT: {who} {when} — {t['body']}")
@@ -978,6 +997,26 @@ def search_messages(conn, question: str, limit: int = 6) -> list[dict]:
                 WHERE messages_fts MATCH ?
                 ORDER BY rank LIMIT ?""",
             (" OR ".join(terms), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(r) for r in rows]
+
+
+def recent_messages(conn, limit: int = 8) -> list[dict]:
+    """The newest texts, newest first, with no search over the question.
+
+    The counterpart to `search_messages`, and the pair exists because texts
+    get asked about two different ways. "What did Sarah say about the fence"
+    is a search. "What was my last text" is a clock question, and running it
+    through FTS returns whatever matches the words "last" and "text" —
+    which is content, not time.
+    """
+    try:
+        rows = conn.execute(
+            """SELECT handle, body, sent_at, direction FROM messages
+                 ORDER BY sent_at DESC LIMIT ?""",
+            (limit,),
         ).fetchall()
     except sqlite3.OperationalError:
         return []

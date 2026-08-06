@@ -101,6 +101,29 @@ def test_a_message_question_puts_the_text_in_context(conn, seen):
     assert "running late" in seen["context"]
 
 
+def test_a_recency_question_sees_the_newest_text(conn, seen):
+    """"What was my last text" is a question about *time*, and FTS ranks by
+    relevance. Its words — "last", "text", "message" — match content rather
+    than recency ("How was last night?"), so a pure search answers it with
+    whatever scattered dates rank highest. Measured on the real database: six
+    hits spanning 2021 to 2026, and the assistant duly reported May and
+    August. Recent texts are therefore listed beside the matches, the same way
+    calls are listed rather than searched.
+    """
+    for year in (2021, 2024, 2025):
+        _message(
+            conn,
+            f"How was last night? we should text more in {year}",
+            sent_at=f"{year}-06-01T12:00:00+00:00",
+        )
+    _message(conn, "picking up the keys at four", sent_at="2026-08-05T18:00:00+00:00")
+
+    handlers.query(
+        conn, 1, {"question": "what was my last text message", "kind": "message"}, "UTC"
+    )
+    assert "picking up the keys" in seen["context"]
+
+
 def test_a_call_question_lists_recent_calls(conn, seen):
     """Calls are not searchable — a handle is a phone number and none of the
     question's words are in the row — so the kind lists them instead."""
