@@ -17,3 +17,4 @@ DerivedData/
 # Same backstop for the Google refresh token, which is a long-lived credential
 # for reading your mail. It is written beside the database, not here.
 google_token.json
+helpers/tccread/tccread
