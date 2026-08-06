@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tccread for call history, as a launchd job. On demand only.
+
+  Same reason as com.jarvis.tccread-messages: TCC attributes a child's file
+  access to the responsible process, which under the python agent is python.
+  Read the comment in that plist; it is the one worth keeping.
+
+  Install:  ./deploy/install-agents.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.tccread-calls</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/helpers/tccread/tccread</string>
+        <string>calls</string>
+        <string>--args-file</string>
+        <string>/Users/jaxongardner/Library/Application Support/jarvis/spool/calls.args</string>
+        <string>--out</string>
+        <string>/Users/jaxongardner/Library/Application Support/jarvis/spool/calls.ndjson</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/tccread-calls.err.log</string>
+</dict>
+</plist>

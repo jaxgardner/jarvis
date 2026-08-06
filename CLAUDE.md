@@ -122,7 +122,30 @@ the minimum possible: two SELECTs, base64 for the blobs, NDJSON out.
   design.** Full Disk Access is granted to an executable, so granting it to
   `.venv/bin/python` would grant it to every script that interpreter ever runs
   — including anything a deep job decides to execute. `tccread`'s entire
-  surface is two queries.
+  surface is two queries. The uv interpreter is in the TCC table at
+  `auth_value 0`; leave it there.
+- **Holding the grant is not enough — TCC asks who is *responsible*.** A
+  process's file access is attributed to the top-level program of whatever
+  launchd started, not to the binary doing the reading. Spawned as an ordinary
+  subprocess from `python -m ingest.messages` under the LaunchAgent, the
+  responsible process is python, and the grant on `tccread` is never
+  consulted. Measured, and it is genuinely confusing: the identical code reads
+  `chat.db` from a Terminal that happens to hold FDA and fails `tcc-denied`
+  under the agent, so it looks like a launchd problem and is not.
+
+  The fix is `com.jarvis.tccread-messages` / `-calls`, two on-demand launchd
+  jobs whose program *is* `tccread`. `_run()` writes the cursor to
+  `<db parent>/spool/<source>.args`, kickstarts the job, and polls for the
+  `.done` marker `tccread` writes last — so a half-written spool cannot be
+  read. Started by launchd, `tccread` is its own responsible process and the
+  grant applies. **Do not "simplify" this back to `subprocess.run([HELPER,…])`:
+  it will work from your terminal and fail on the schedule.**
+- **Ad-hoc signing silently voids the grant on every rebuild**, and macOS then
+  records the binary as *denied* rather than unknown — so the failure reads as
+  "the grant never worked" instead of "you rebuilt". `build.sh` now picks a
+  Developer ID Application identity automatically when one exists, because the
+  designated requirement it produces (`identifier tccread … OU = <team>`) is
+  stable across builds. Ad-hoc remains the fallback and warns loudly.
 - **It parses nothing, so no parsing bug is ever privileged.** The typedstream
   blob and both Apple epochs are decoded in Python, against fixtures, in
   `ingest/typedstream.py` and the two importers.
@@ -146,9 +169,10 @@ the minimum possible: two SELECTs, base64 for the blobs, NDJSON out.
   LaunchDaemon.** TCC grants are per-user and live in the GUI login session;
   a system daemon runs outside it and does not inherit them, so the identical
   code that works from your shell fails under launchd with `tcc-denied` and
-  nothing else to go on. `deploy/install-agents.sh` installs them, without
-  sudo — under sudo they would land in root's domain, which is the same
-  mistake wearing a different hat.
+  nothing else to go on. `deploy/install-agents.sh` installs all four labels —
+  the two importers and the two on-demand `tccread` jobs — without sudo, since
+  under sudo they would land in root's domain, which is the same mistake
+  wearing a different hat.
 - **No handle is resolved to a person.** `person_id` exists on both tables and
   stays NULL. Matching a phone number to a `people` row needs a normalisation
   rule (`+1555…` against `(555) …`) that nothing here has yet, and guessing it

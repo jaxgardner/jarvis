@@ -15,17 +15,22 @@ becomes painful.
 """
 
 import json
+import os
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import timeutil
-from app.config import REPO_ROOT
+from app.config import DB_PATH, REPO_ROOT
 from app.db import transaction
 from ingest import state
 
 SOURCE = "calls"
 HELPER = str(REPO_ROOT / "helpers" / "tccread" / "tccread")
+AGENT = "com.jarvis.tccread-calls"
+SPOOL = DB_PATH.parent / "spool"
+TIMEOUT_S = 180
 
 _APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
@@ -60,24 +65,62 @@ def store(conn, row: dict) -> None:
 
 
 def _run(command: str, since: str, limit: int) -> list[dict]:
+    """Ask launchd to run tccread, then read what it spooled.
+
+    See `ingest.messages._run` for why this is not a plain subprocess: TCC
+    attributes a child's file access to the responsible process, which under
+    the LaunchAgent is python, which is denied and must stay denied.
+    """
     if not Path(HELPER).exists():
         raise FileNotFoundError(
             f"tccread not built at {HELPER} — run helpers/tccread/build.sh"
         )
+
+    SPOOL.mkdir(parents=True, exist_ok=True)
+    args_file = SPOOL / f"{command}.args"
+    out_file = SPOOL / f"{command}.ndjson"
+    done_file = SPOOL / f"{command}.ndjson.done"
+    err_file = SPOOL / f"{command}.ndjson.err"
+
+    for stale in (out_file, done_file, err_file):
+        stale.unlink(missing_ok=True)
+    args_file.write_text(f"{since}\n{limit}\n")
+
     proc = subprocess.run(
-        [HELPER, command, "--since", since, "--limit", str(limit)],
+        ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{AGENT}"],
         capture_output=True,
         text=True,
-        timeout=120,
     )
-    if proc.returncode == 2:
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"tccread agent {AGENT} would not start — run "
+            f"deploy/install-agents.sh ({proc.stderr.strip()})"
+        )
+
+    deadline = time.monotonic() + TIMEOUT_S
+    while not done_file.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"tccread agent {AGENT} did not finish within {TIMEOUT_S}s"
+            )
+        time.sleep(0.05)
+
+    code = done_file.read_text().strip()
+    if code == "2":
         raise PermissionError(
             "tccread has no Full Disk Access — grant it in System Settings "
-            "(Privacy & Security -> Full Disk Access) and re-run"
+            "(Privacy & Security -> Full Disk Access) and re-run. A rebuild "
+            "of an ad-hoc signed tccread also invalidates an existing grant."
         )
-    if proc.returncode != 0:
-        raise RuntimeError(f"tccread exited {proc.returncode}: {proc.stderr.strip()}")
-    return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    if code != "0":
+        detail = err_file.read_text().strip() if err_file.exists() else ""
+        raise RuntimeError(f"tccread exited {code}: {detail}")
+
+    return [
+        json.loads(line)
+        for line in out_file.read_text().splitlines()
+        if line.strip()
+    ]
 
 
 def sync(limit: int = 2000) -> dict:

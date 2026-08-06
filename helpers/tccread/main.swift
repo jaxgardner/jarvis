@@ -6,6 +6,19 @@
 // and is decoded in Python, where a bug is a failed test rather than a
 // privileged crash.
 //
+// Two ways to run it, and the second exists for a macOS reason worth knowing:
+//
+//   tccread messages --since ISO --limit N        → NDJSON on stdout
+//   tccread messages --args-file P --out Q        → NDJSON into Q
+//
+// TCC attributes a file access to the *responsible process*, which for a child
+// process is the top-level program of whatever launchd started. Under the
+// LaunchAgent that runs `python -m ingest.messages`, that is python — which has
+// no Full Disk Access and must never be given any. So the importer asks launchd
+// to start THIS binary as its own job, where it is its own responsible process
+// and the grant on it is the one consulted. A launchd job's arguments are fixed
+// in its plist, hence --args-file: the cursor arrives in a file instead.
+//
 // Exit codes: 0 ok, 2 TCC denied, 3 usage, 4 sqlite error.
 
 import Foundation
@@ -13,8 +26,22 @@ import SQLite3
 
 let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+// Declared before fail() because fail() reports through it. In spool mode the
+// parent is polling for the done file; without writing one on the failure path
+// a denial would look like a hang until the parent's timeout.
+var outPath: String? = nil
+
+func writeDone(_ code: Int32) {
+    guard let out = outPath else { return }
+    try? Data("\(code)\n".utf8).write(to: URL(fileURLWithPath: out + ".done"))
+}
+
 func fail(_ message: String, _ code: Int32) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
+    if let out = outPath {
+        try? Data((message + "\n").utf8).write(to: URL(fileURLWithPath: out + ".err"))
+    }
+    writeDone(code)
     exit(code)
 }
 
@@ -83,26 +110,61 @@ func rows(_ db: OpaquePointer, _ sql: String, _ bind: [Any]) -> [[String: Any]] 
 }
 
 func emit(_ rows: [[String: Any]]) {
+    var buffer = Data()
     for row in rows {
         guard let data = try? JSONSerialization.data(withJSONObject: row) else { continue }
-        FileHandle.standardOutput.write(data)
-        FileHandle.standardOutput.write(Data("\n".utf8))
+        buffer.append(data)
+        buffer.append(Data("\n".utf8))
+    }
+    if let out = outPath {
+        // Written whole, and the .done marker only after this returns, so the
+        // parent can never read a half-written spool.
+        do {
+            try buffer.write(to: URL(fileURLWithPath: out))
+        } catch {
+            fail("spool-write-failed: \(out): \(error)", 4)
+        }
+    } else {
+        FileHandle.standardOutput.write(buffer)
     }
 }
 
 // ── arguments ────────────────────────────────────────────────────────────
 
 var args = Array(CommandLine.arguments.dropFirst())
-guard let command = args.first else { fail("usage: tccread <messages|calls> [--since ISO] [--limit N]", 3) }
+guard let command = args.first else {
+    fail("usage: tccread <messages|calls> [--since ISO] [--limit N] [--args-file P] [--out Q]", 3)
+}
 args = Array(args.dropFirst())
 
 var since = "1970-01-01T00:00:00Z"
 var limit = 2000
+var argsFile: String? = nil
+
 var index = 0
-while index < args.count - 1 {
-    if args[index] == "--since" { since = args[index + 1] }
-    if args[index] == "--limit" { limit = Int(args[index + 1]) ?? limit }
+while index + 1 < args.count {
+    switch args[index] {
+    case "--since":     since = args[index + 1]
+    case "--limit":     limit = Int(args[index + 1]) ?? limit
+    case "--args-file": argsFile = args[index + 1]
+    case "--out":       outPath = args[index + 1]
+    default:            break
+    }
     index += 2
+}
+
+// Two lines, not JSON: the cursor and the row cap are the only things that
+// vary per run, and a parser here is surface area on the one privileged
+// binary in the system.
+if let path = argsFile {
+    guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+        fail("args-file-unreadable: \(path)", 3)
+    }
+    let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+    if lines.count > 0, !lines[0].isEmpty { since = String(lines[0]) }
+    if lines.count > 1, let parsed = Int(lines[1].trimmingCharacters(in: .whitespaces)) {
+        limit = parsed
+    }
 }
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -152,3 +214,5 @@ case "calls":
 default:
     fail("unknown command: \(command)", 3)
 }
+
+writeDone(0)

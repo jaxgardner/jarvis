@@ -21,9 +21,15 @@
 
 set -uo pipefail   # deliberately NOT -e; one bad label must not abort the run
 
+# The tccread-* pair are on-demand jobs with no schedule of their own: the two
+# importers kickstart them. They are jobs at all only so that tccread is its
+# own responsible process and the Full Disk Access grant on it applies — see
+# the comment in com.jarvis.tccread-messages.plist.
 LABELS=(
     com.jarvis.messages
     com.jarvis.calls
+    com.jarvis.tccread-messages
+    com.jarvis.tccread-calls
 )
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOGDIR="${HOME}/Library/Logs/jarvis"

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tccread, as a launchd job. On demand only: no StartInterval, no RunAtLoad.
+  com.jarvis.messages kickstarts it and waits for the spool file.
+
+  This exists because of how macOS TCC assigns blame. A process's file access
+  is attributed to the *responsible process*, which for a child process is the
+  top-level program of whatever launchd started. When `python -m ingest.messages`
+  spawns tccread, that is python — which is in the TCC table as DENIED and must
+  stay that way, because granting the interpreter Full Disk Access grants it to
+  every script it ever runs, including deep-path `claude -p` jobs.
+
+  Measured on this machine: the identical binary reads chat.db from a Terminal
+  that holds the grant, and fails `tcc-denied` under the python agent. Started
+  as its own launchd job it is its own responsible process, so the grant that
+  is actually on tccread is the one consulted, and it works.
+
+  A launchd job's arguments are fixed here, so the cursor cannot be passed on
+  the command line — hence --args-file, which ingest/messages.py writes just
+  before kickstarting. --out is the spool; tccread writes <out>.done last, and
+  that marker is what the importer polls for.
+
+  Install:  ./deploy/install-agents.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.tccread-messages</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/helpers/tccread/tccread</string>
+        <string>messages</string>
+        <string>--args-file</string>
+        <string>/Users/jaxongardner/Library/Application Support/jarvis/spool/messages.args</string>
+        <string>--out</string>
+        <string>/Users/jaxongardner/Library/Application Support/jarvis/spool/messages.ndjson</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/tccread-messages.err.log</string>
+</dict>
+</plist>
