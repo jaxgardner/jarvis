@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis Messages importer — LaunchAgent, 15 minute interval.
+
+  A LaunchAgent and NOT a LaunchDaemon, which every other job here is. This is
+  the whole reason a second installer exists. `chat.db` is TCC-protected and
+  the Full Disk Access grant is per-user, made through the GUI and held by
+  helpers/tccread. A system daemon runs outside that user session and does not
+  inherit the grant, so the same code that works from your shell fails from
+  launchd with `tcc-denied` and nothing else to go on.
+
+  Shaped like com.jarvis.calendar otherwise: StartInterval rather than
+  KeepAlive, so each run is one sync that exits and a hung run cannot wedge
+  the schedule. Local reads, no network, no API cost — the interval is about
+  freshness alone.
+
+  `ingest.messages.sync` never raises, so a missing binary or a revoked grant
+  marks the source stale in `sync_state` and leaves every other importer
+  running. Check it with /health, not with this log.
+
+  Install:  ./deploy/install-agents.sh      (NO sudo — see the script)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.messages</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>ingest.messages</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/messages.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/messages.err.log</string>
+</dict>
+</plist>

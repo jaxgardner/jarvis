@@ -29,7 +29,8 @@ wrong, say so — don't silently do it differently.
     gratitude/   three things a day: entries, and the evening prompt
     brief/       the 7am morning brief: mail summary, and the job
     projects/    named spaces: the queries, and a directory per project
-    ingest/      Google Calendar + Gmail importers
+    ingest/      Google Calendar + Gmail + Messages + call history importers
+    helpers/     tccread: the one binary holding Full Disk Access
     migrations/  numbered .sql, applied by migrate.py
     tests/
 
@@ -46,7 +47,8 @@ nullable `project_id` (migration 014).
 Operational: `utterances`, `mutations`, `jobs` — `utterances` carries
 `turn_ms` and `timings` (migration 016), both nullable permanently. Search: `notes_fts`
 (external-content FTS5 + three sync triggers). Ingestion:
-`sync_state`, `proposals`, `email_messages` + `email_fts`.
+`sync_state`, `proposals`, `email_messages` + `email_fts`, and `messages` +
+`messages_fts` and `calls` (migration 017).
 
 Timestamps are **ISO 8601 with offset**. Never naive local time, never a bare
 date for something that has a time. This is the single most common source of
@@ -57,8 +59,9 @@ Schema subtleties worth not rediscovering:
   still allowing many NULL `external_id` rows.
 - Notes are soft-deleted, which fires the FTS *update* trigger, not the delete
   trigger. Soft-deleted rows stay in the index; search must join `notes` and
-  filter `deleted_at IS NULL`. Email rows are *hard*-deleted when they age out,
-  so `email_fts` needs no such join.
+  filter `deleted_at IS NULL`. Email and message rows are *hard*-deleted when
+  they age out, so `email_fts` and `messages_fts` need no such join — the
+  delete trigger fires and the index stays honest on its own.
 - `idx_proposals_ext` excludes rejected rows, so it does **not** stop a message
   being re-proposed after you said no. `ingest.gmail.candidates()` enforces
   that, by skipping any message with a proposals row of any status.
@@ -69,7 +72,7 @@ Schema subtleties worth not rediscovering:
 ## Ingestion
 
 Read-only, one direction. Voice events stay `source='voice'` and are never
-pushed to Google. Two sources, two very different postures:
+pushed to Google. Four sources, in three very different postures:
 
 - **Calendar → `events`, directly.** Structured in, structured out, nothing to
   extract and nothing to review.
@@ -78,6 +81,10 @@ pushed to Google. Two sources, two very different postures:
   back?". Separately, a narrow query feeds a capped Haiku extractor whose
   output lands in `proposals` — a review queue. **No path from email to
   `events` without a human accepting it.**
+- **Messages and call history → `messages` and `calls`, directly**, off the
+  Mac's own databases. Structured in, structured out, like Calendar — and
+  local, so no network and no API cost. See below; they are the only two
+  sources reached through a privileged helper.
 
 Message bodies are never stored. `format=metadata` means Gmail does not return
 them, so there is no path to storing them by accident.
@@ -103,6 +110,59 @@ was built for. Anything a human *accepts* goes through the helper as normal.
 Cursors expire on Google's schedule — Calendar answers **410**, Gmail **404**.
 Both are routine: drop the cursor, refetch in full. An ingester that treats
 either as fatal stops permanently after a quiet week.
+
+### Texts and calls come through a binary that parses nothing
+
+`chat.db` and `CallHistoryDB/` are TCC-protected — verified on this machine,
+the first answers `authorization denied` and the second refuses even `ls`.
+`helpers/tccread` is a small Swift binary that holds Full Disk Access and does
+the minimum possible: two SELECTs, base64 for the blobs, NDJSON out.
+
+- **The grant is on the binary, not on the interpreter, and that is the whole
+  design.** Full Disk Access is granted to an executable, so granting it to
+  `.venv/bin/python` would grant it to every script that interpreter ever runs
+  — including anything a deep job decides to execute. `tccread`'s entire
+  surface is two queries.
+- **It parses nothing, so no parsing bug is ever privileged.** The typedstream
+  blob and both Apple epochs are decoded in Python, against fixtures, in
+  `ingest/typedstream.py` and the two importers.
+- **The signature is what the grant is keyed on, not the path.** `build.sh`
+  ad-hoc signs by default, which regenerates the identity every build and
+  silently invalidates the grant — the binary then fails with `tcc-denied`
+  after a rebuild that changed nothing. Set `TCCREAD_IDENTITY` to a real
+  identity if you rebuild often.
+- **`attributedBody` carries the text; `message.text` is usually NULL.** An
+  importer reading `text` alone appears to work on old rows and silently drops
+  most of the corpus — the failure you notice months later, when the assistant
+  insists someone never texted you. `ingest/typedstream.py` is a deliberately
+  narrow reader that returns None rather than raising, because one malformed
+  row must not take down an import of several thousand messages.
+- **Same 2001 epoch, two different units.** `chat.db`'s `message.date` counts
+  **nanoseconds**; `ZCALLRECORD.ZDATE` counts **seconds**. Mistaking one for
+  the other is an error of 31 years that still produces a date a reviewer
+  nods at, which is why each importer converts its own and there is no shared
+  helper to get it wrong in one place for both.
+- **These two run from a LaunchAgent, and everything else here is a
+  LaunchDaemon.** TCC grants are per-user and live in the GUI login session;
+  a system daemon runs outside it and does not inherit them, so the identical
+  code that works from your shell fails under launchd with `tcc-denied` and
+  nothing else to go on. `deploy/install-agents.sh` installs them, without
+  sudo — under sudo they would land in root's domain, which is the same
+  mistake wearing a different hat.
+- **No handle is resolved to a person.** `person_id` exists on both tables and
+  stays NULL. Matching a phone number to a `people` row needs a normalisation
+  rule (`+1555…` against `(555) …`) that nothing here has yet, and guessing it
+  wrong attributes a text to the wrong person — worse than an unnamed number.
+- **`query` gains `kind='message'` and `kind='call'`, and no new router tool.**
+  Texts are searched beside mail on every `query`, for the reason the brief and
+  the agenda share a formatter: "did the landlord write back" can be answered
+  by either, and an answer that depends on which one the router picked is an
+  answer you cannot trust. Calls are not searchable at all — a handle is a
+  phone number and none of the question's words are in the row — so
+  `kind='call'` lists the recent ones and is the one context block that looks
+  *backwards*. A missed call also joins `today_block`, off the same local
+  midnight `agenda_rows` uses; an answered one does not, because you dealt
+  with it.
 
 ## Pantry
 

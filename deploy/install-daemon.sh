@@ -5,6 +5,12 @@
 #
 # Safe to re-run.
 #
+# NOT every job here. com.jarvis.messages and com.jarvis.calls are per-user
+# LaunchAgents installed by ./deploy/install-agents.sh, because their Full
+# Disk Access grant lives in the GUI login session and a system daemon does
+# not inherit it. Adding either label below would install a job that runs on
+# schedule and fails every time with `tcc-denied`.
+#
 # Two things this has to get right, both learned the hard way:
 #
 #   1. `launchctl bootout` returns before the service is actually gone. Calling

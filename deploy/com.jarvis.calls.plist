@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Jarvis call-history importer — LaunchAgent, 15 minute interval.
+
+  A LaunchAgent for the same reason com.jarvis.messages is one: CallHistoryDB
+  is TCC-protected, the Full Disk Access grant is per-user and held by
+  helpers/tccread, and a system daemon runs outside the session that holds it.
+
+  Its own label rather than a second command inside the messages agent, so the
+  two have separate logs and either can be booted out without the other. They
+  already keep separate `sync_state` rows for the same reason.
+
+  Install:  ./deploy/install-agents.sh      (NO sudo — see the script)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jarvis.calls</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jaxongardner/development/jarvis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>ingest.calls</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jaxongardner/development/jarvis</string>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/calls.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/jaxongardner/Library/Logs/jarvis/calls.err.log</string>
+</dict>
+</plist>
